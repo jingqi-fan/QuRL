@@ -238,7 +238,7 @@ class DiffDiscreteEventSystemTorchRL(EnvBase):
         time.add_(event_time)
         cost = (event_time * queues) @ self.h  # [1, 1] * [q] via broadcasting -> [1, 1]
 
-        queues = F.relu(queues + delta_q.unsqueeze(0))
+        queues = F.relu(queues + delta_q)
         self._queues.copy_(queues)
 
         # update service times for jobs with positive work
@@ -269,8 +269,10 @@ class DiffDiscreteEventSystemTorchRL(EnvBase):
 
             if delta_arrived.sum() == 1:
                 self._arrival_times = self._arrival_times + torch.nan_to_num(
-                    new_arrival_times * delta_arrived.unsqueeze(0), nan=self.inv_eps
+                    new_arrival_times.reshape(1, self.q) * delta_arrived.view(1, self.q),
+                    nan=self.inv_eps,
                 )
+
             which_arrival = torch.argmax(delta_arrived).item()
             self._service_times[which_arrival].append(new_service_time)
 
@@ -340,8 +342,20 @@ if __name__ == "__main__":
     )
 
     td = env.reset()
-    for _ in range(5):
-        # random action in spec range
-        a = env.action_spec.rand()
-        td = env.step(TensorDict({"action": a}, batch_size=[]))
-        print(td.get("reward").item(), td.get("queues").shape, td.get("time").item())
+    print("reset:", td.get("queues"), td.get("time"))  # 这里只看观测
+
+    for t in range(5):
+        action = env.network.squeeze(0).clone()
+        td = env.step(TensorDict({"action": action}, batch_size=[]))
+
+        # 取 next 子字典里的值
+        queues = td["next", "queues"]
+        now_t = td["next", "time"]
+        reward = td["next", "reward"]
+        done = td["next", "done"]
+
+        print(f"t={t + 1:02d} | time={float(now_t.item()):.4f} | "
+              f"reward={float(reward.item()):.4f} | queues={queues.tolist()}")
+
+        # 如果你后面要把“下一状态”作为输入继续迭代，可以把 td 递进为 next：
+        td = td.get("next")
