@@ -1,0 +1,16 @@
+results
+
+# PyCharm
+*.iml
+.idea
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+
+
+
+
