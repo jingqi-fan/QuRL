@@ -1,288 +1,220 @@
-# train_torchrl.py  — TorchRL PPO (GPU) trainer for your env
-
-import os, sys, time, json, yaml, math
+import sys
+import os
+import time
+import json
+import yaml
 import numpy as np
 import torch
 from torch import nn
-from tensordict import TensorDict
-from torchrl.envs import ParallelEnv
-from torchrl.collectors import SyncDataCollector
-from torchrl.objectives import ClipPPOLoss
-from torchrl.objectives.value import GAE
-from torchrl.modules import (
-    ProbabilisticActor,
-    TanhNormal,
-    ValueOperator,
-)
-from tensordict.nn import TensorDictModule, TensorDictSequential
-from tensordict.nn.distributions import AddStateIndependentNormalScale
 
-from torchrl.data import TensorDictReplayBuffer, LazyTensorStorage
-from torch.optim import Adam
-
-# 项目路径
 project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 RL_root = os.path.join(project_root, 'RL')
-sys.path.extend([project_root, RL_root])
+sys.path.append(project_root)
+sys.path.append(RL_root)
 
-# 你刚做好的纯 TorchRL 环境加载器（兼容旧签名）
-from RL.utils.rl_env import load_rl_p_env  # 返回 RLQueueEnv 实例（TorchRL EnvBase）
+from RL.utils.rl_env import load_rl_p_env
+from RL.policies.WC_policy import WC_Policy
+from RL.policies.vanilla_policy import Vanilla_Policy
+from RL.PPO.trainer import TorchRLPPOTrainer
+from RL.utils.eval import ParallelEvalTorchRL
+from RL.utils.count_time import count_time
 
-# -----------------------------
-# Utils
-# -----------------------------
-
-def cosine_lr(initial_lr, min_lr=1e-5, progress=1.0, warmup=0.03):
-    progress = float(np.clip(progress, 0.0, 1.0))
-    if progress > (1 - warmup):
-        warm = (1 - progress) / warmup
-        return min_lr + (initial_lr - min_lr) * warm
-    adj = (progress - (1 - warmup)) / (1 - warmup)
-    cos_decay = 0.5 * (1 + math.cos(math.pi * adj))
-    return initial_lr * ((1 - min_lr / initial_lr) * cos_decay + min_lr / initial_lr)
-
-def concat_obs(td, time_in_obs: bool):
-    # 你的 env obs 是 Composite: {"queues":[q], "time":[1]}
-    q = td.get("queues")
-    if time_in_obs:
-        t = td.get("time")
-        return torch.cat([q, t], dim=-1)
-    return q
-
-# -----------------------------
-# Model builders
-# -----------------------------
-
-def build_actor_value(env, pi_arch, vf_arch, time_f: bool, device):
-    """构建 Actor/Value 网络（MLP），Actor 用 TanhNormal + AddStateIndependentNormalScale。
-       最后由 ProbabilisticActor 自动 clamp 到 action_spec 边界。"""
-    obs_dim = env.observation_spec["queues"].shape[-1] + (1 if time_f else 0)
-    act_shape = env.action_spec.shape   # [s, q]
-    act_dim = int(torch.prod(torch.tensor(act_shape)).item())
-
-    # feature extractor
-    def mlp(sizes):
-        layers = []
-        for i in range(len(sizes)-1):
-            layers += [nn.Linear(sizes[i], sizes[i+1]), nn.Tanh()]
-        return nn.Sequential(*layers[:-1])  # 去掉最后一个 Tanh
-    actor_net = mlp([obs_dim] + pi_arch + [act_dim])   # 输出动作 mean（未tanh）
-    value_net = mlp([obs_dim] + vf_arch + [1])
-
-    # wrap into TensorDictModules
-    def obs_to_feat(td):
-        x = concat_obs(td, time_f)
-        return {"obs_vec": x}
-    obs_module = TensorDictModule(lambda td: td.update(obs_to_feat(td)), in_keys=[], out_keys=["obs_vec"])
-
-    actor_module = TensorDictModule(
-        module=nn.Sequential(
-            nn.LayerNorm(obs_dim),  # 稍微稳定
-            nn.Identity(),          # obs_vec 在 td 中
-        ),
-        in_keys=["obs_vec"],
-        out_keys=["obs_vec_norm"],
-    )
-
-    # 平滑点：把 obs_vec_norm 直接送入 actor_net/value_net
-    class Head(nn.Module):
-        def __init__(self, net): super().__init__(); self.net=net
-        def forward(self, x): return self.net(x)
-
-    actor_mean = TensorDictModule(
-        module=Head(actor_net),
-        in_keys=["obs_vec_norm"],
-        out_keys=["loc"],  # mean
-    )
-    # state-independent log_std 参数
-    actor_scale = AddStateIndependentNormalScale(
-        in_keys=["loc"], out_keys=["scale"], init_scale=0.5, min_scale=1e-4
-    )
-    # TanhNormal -> 映射到 (-1,1)，ProbActor 会根据 action_spec 再缩放到 [low, high]
-    actor = ProbabilisticActor(
-        in_keys=["loc", "scale"],
-        spec=env.action_spec,
-        distribution_class=TanhNormal,
-        return_log_prob=True,
-        default_interaction_type=None,  # "random" during collect, "mean" during eval 可切换
-    )
-
-    # Value
-    value_module = TensorDictModule(
-        module=Head(value_net),
-        in_keys=["obs_vec_norm"],
-        out_keys=["state_value"],
-    )
-    value = ValueOperator(module=value_module, in_keys=["obs_vec_norm"])
-
-    # 串起来：obs_module -> actor_module -> actor_mean -> actor_scale -> actor
-    actor_tdseq = TensorDictSequential(obs_module, actor_module, actor_mean, actor_scale, actor).to(device)
-    value_tdseq = TensorDictSequential(obs_module, actor_module, value).to(device)
-
-    return actor_tdseq, value_tdseq
-
-# -----------------------------
-# Trainer
-# -----------------------------
 
 def main():
-    # 命令行参数
-    cfg_name = sys.argv[1]   # policy_configs/*.yaml
-    env_cfg_name = sys.argv[2]  # configs/env/<name>.yaml
+    ct = count_time(time.time())
 
-    # 读取配置
-    config_path = os.path.join(RL_root, 'policy_configs', cfg_name if cfg_name.endswith('.yaml') else f"{cfg_name}.yaml")
-    with open(config_path, 'r', encoding='utf-8') as f:
+    config_file_name = sys.argv[1]
+    env_config_name = sys.argv[2]
+
+    if not config_file_name.endswith(".yaml"):
+        config_file_name += ".yaml"
+
+    config_file_path = os.path.join(RL_root, "policy_configs", config_file_name)
+    with open(config_file_path, "r") as f:
         config = yaml.safe_load(f)
 
-    env_cfg_path = os.path.join(project_root, 'configs', 'env', f'{env_cfg_name}.yaml')
-    with open(env_cfg_path, 'r', encoding='utf-8') as f:
+    print(f"env_config: {env_config_name}")
+    env_config_path = os.path.join(project_root, "configs", "env", f"{env_config_name}.yaml")
+    with open(env_config_path, "r", encoding="UTF-8") as f:
         env_config = yaml.safe_load(f)
 
-    # device & seeds
+    name = env_config["name"]
+    env_type = env_config.get("env_type", name)
+    print(f"name: {name}, env_type: {env_type}")
+
+    # === Load env data ===
+    if env_config["network"] is None:
+        network_path = os.path.join(project_root, "configs", "env_data", env_type, f"{env_type}_network.npy")
+        network = np.load(network_path)
+    else:
+        network = env_config["network"]
+
+    if env_config["mu"] is None:
+        mu_path = os.path.join(project_root, "configs", "env_data", env_type, f"{env_type}_mu.npy")
+        mu = np.load(mu_path)
+    else:
+        mu = env_config["mu"]
+
+    network = torch.tensor(network, dtype=torch.float32)
+    mu = torch.tensor(mu, dtype=torch.float32)
+    orig_s, orig_q = network.size()
+
+    # repeat for server pools
+    num_pool = env_config["num_pool"]
+    network = network.repeat_interleave(num_pool, dim=0)
+    mu = mu.repeat_interleave(num_pool, dim=0)
+
+    init_test_queues = torch.tensor([env_config["init_queues"]], dtype=torch.float32)
+
+    # === Env hyperparams ===
     device = torch.device(config["env"]["device"])
-    train_seed = int(config["env"]["train_seed"])
-    test_seed = int(config["env"]["test_seed"])
-    time_f = bool(config["env"]["time_f"])
-    env_temp = float(config["env"]["env_temp"])
-    actors = int(config["training"]["actors"])
+    test_seed = config["env"]["test_seed"]
+    train_seed = config["env"]["train_seed"]
+    env_temp = config["env"]["env_temp"]
+    randomize = config["env"]["randomize"]
+    time_f = config["env"]["time_f"]
+    policy_name = config["model"]["policy_name"]
 
-    # PPO / GAE 超参
-    episode_steps = int(config["training"]["episode_steps"])
-    num_epochs = int(config["training"]["num_epochs"])
-    ppo_epochs = int(config["training"]["ppo_epochs"])
-    gamma = float(config["training"]["gamma"])
-    gae_lambda = float(config["training"]["gae_lambda"])
-    clip_range = 0.2
-    ent_coef = float(config["training"]["ent_coef"])
-    vf_coef = float(config["training"]["vf_coef"])
-    target_kl = config["training"]["target_kl"]  # 可能是 None
+    print(f"device={device}, test_seed={test_seed}, train_seed={train_seed}, policy_name={policy_name}")
 
-    # 学习率
-    lr_policy = float(config["training"]["lr_policy"])
-    lr_value = float(config["training"]["lr_value"])
-    min_lr_policy = float(config["training"]["min_lr_policy"])
-    min_lr_value = float(config["training"]["min_lr_value"])
+    # === Training hyperparams ===
+    actors = config["training"]["actors"]
+    num_epochs = config["training"]["num_epochs"]
+    episode_steps = config["training"]["episode_steps"]
+    gae_lambda = config["training"]["gae_lambda"]
+    gamma = config["training"]["gamma"]
+    target_kl = config["training"]["target_kl"]
+    vf_coef = config["training"]["vf_coef"]
+    ppo_epochs = config["training"]["ppo_epochs"]
+    ent_coef = config["training"]["ent_coef"]
+    bc = config["training"]["behavior_cloning"]
 
-    # 网络规模
-    scale = int(config["model"]["scale"])
-    # 根据 env 的 s, q 设置网络宽度（读取一次 env 来拿 shape）
-    env_probe = load_rl_p_env(env_config, temp=env_temp, batch=1, seed=train_seed, policy_name="torchrl", device=device)
-    q = env_probe.observation_spec["queues"].shape[-1]
-    s, qq = env_probe.action_spec.shape
-    assert qq == q, "action_spec last dim != queues dim"
-    gm = int(math.sqrt(s * q))
-    pi_arch = [scale * q, scale * gm, scale * s]
-    vf_arch = [scale * q, scale * gm, scale * s]
-    del env_probe  # 释放探针环境
+    lr_policy = config["training"]["lr_policy"]
+    lr_value = config["training"]["lr_value"]
+    min_lr_policy = config["training"]["min_lr_policy"]
+    min_lr_value = config["training"]["min_lr_value"]
 
-    # 环境构造器
-    def make_env(i):
-        # 不使用 DummyVecEnv，直接返回 TorchRL Env
-        return load_rl_p_env(env_config, temp=env_temp, batch=1, seed=train_seed + i, policy_name="torchrl", device=device)
+    scale = config["model"]["scale"]
+    test_policy = config["policy"]["test_policy"]
+    test_batch = config["training"]["test_batch"]
+    test_T = env_config["test_T"]
 
-    # 并行环境
-    env = ParallelEnv(actors, lambda: make_env(0))  # torchrl 会多次调用 factory；seed 我们在 collector 中设置
-    env.set_seed(train_seed)
+    total_steps = num_epochs * episode_steps * actors
+    eval_freq = episode_steps
 
-    # 构建 Actor/Value
-    actor, value = build_actor_value(env, pi_arch, vf_arch, time_f=time_f, device=device)
+    print(f"total_steps={total_steps}, test_T={test_T}, eval_freq={eval_freq}")
 
-    # GAE & PPO Loss
-    advantage = GAE(gamma=gamma, lmbda=gae_lambda, value_network=value, average_gae=True)
-    loss_module = ClipPPOLoss(
-        actor_network=actor,
-        critic=value,
-        clip_epsilon=clip_range,
-        entropy_coef=ent_coef,
-        critic_coef=vf_coef,
-        normalize_advantage=True,
-    ).to(device)
+    # === Env builders ===
+    def make_env(seed):
+        return load_rl_p_env(
+            env_config=env_config,
+            temp=env_temp,
+            batch=1,
+            seed=seed,
+            policy_name=policy_name,
+            device=device,
+        )
 
-    # 优化器
-    optim_policy = Adam(actor.parameters(), lr=lr_policy)
-    optim_value = Adam(value.parameters(), lr=lr_value)
+    # raw env for D options
+    dq_raw = make_env(train_seed)
 
-    # 采样器（每轮采样 episode_steps * actors 条数据）
-    collector = SyncDataCollector(
-        env,
-        policy=actor,
-        frames_per_batch=episode_steps * actors,
-        total_frames=num_epochs * episode_steps * actors,
-        device=device,
-        storing_device=device,
-        reset_at_each_iter=False,
-        split_trajs=True,  # 更利于 GAE
+    # === Policy Networks ===
+    L = orig_q
+    J = orig_s
+    gmLJ = int(np.sqrt(L * J))
+    pi_arch = [scale * L, scale * gmLJ, scale * J]
+    vi_arch = [scale * L, scale * gmLJ, scale * J]
+
+    print(f"pi_arch={pi_arch}, vi_arch={vi_arch}")
+
+    policy_kwargs = dict(
+        activation_fn=nn.Tanh,
+        network=network,
+        time_f=time_f,
+        randomize=randomize,
+        scale=scale,
+        rescale_v=config["training"]["rescale_v"],
+        alpha=0,
+        D=dq_raw.queue_event_options,
+        mu=mu,
+        net_arch=dict(pi=pi_arch, vf=vi_arch),
     )
 
-    # Replay-like buffer（on device）
-    storage = LazyTensorStorage(episode_steps * actors, device=device)
-    rb = TensorDictReplayBuffer(storage=storage)
+    if policy_name == "WC":
+        PolicyClass = WC_Policy
+    elif policy_name == "vanilla":
+        PolicyClass = Vanilla_Policy
+    else:
+        raise ValueError(f"Unknown policy {policy_name}")
 
-    global_frames = 0
-    for epoch, tensordict_data in enumerate(collector):
-        # tensordict_data: ["next","observation", "action", "reward", "done", "terminated", "truncated", "log_prob"]
-        frames = tensordict_data.numel()
-        global_frames += frames
+    actor = PolicyClass(**policy_kwargs).to(device)
+    value = nn.Sequential(
+        nn.Linear(L, vi_arch[0]),
+        nn.Tanh(),
+        nn.Linear(vi_arch[0], vi_arch[1]),
+        nn.Tanh(),
+        nn.Linear(vi_arch[1], vi_arch[2]),
+        nn.Tanh(),
+        nn.Linear(vi_arch[2], 1),
+    ).to(device)
 
-        # 计算 advantage / returns
-        with torch.no_grad():
-            tensordict_data = advantage(tensordict_data)
-        rb.extend(tensordict_data)
+    # === Trainer ===
+    trainer = TorchRLPPOTrainer(
+        actor=actor,
+        value=value,
+        env=make_env(train_seed),
+        lr_policy=lr_policy,
+        lr_value=lr_value,
+        min_lr_policy=min_lr_policy,
+        min_lr_value=min_lr_value,
+        clip_range=0.2,
+        ent_coef=ent_coef,
+        vf_coef=vf_coef,
+        gamma=gamma,
+        gae_lambda=gae_lambda,
+        ppo_epochs=ppo_epochs,
+        num_epochs=num_epochs,
+        episode_steps=episode_steps,
+        actors=actors,
+        device=device,
+        target_kl=target_kl,
+        ct=ct,
+    )
 
-        # PPO 多 epoch
-        for ppo_iter in range(ppo_epochs):
-            # 这里做简单整包训练（也可切成 minibatch）
-            batch = rb.sample(len(rb))
-            # 更新 loss 的 KL 参考
-            loss_module.update_sampled_log_prob(batch)
+    # === Eval ===
+    evaler = ParallelEvalTorchRL(
+        actor=actor,
+        make_env_fn=lambda seed: make_env(seed),
+        eval_freq=eval_freq,
+        eval_t=test_T,
+        test_seed=test_seed,
+        test_batch=test_batch,
+        device=device,
+        bc=bc,
+        per_iter_normal_obs=config["training"]["per_iter_normal_obs"],
+        verbose=1,
+    )
 
-            # policy 更新
-            optim_policy.zero_grad()
-            loss_pi = loss_module.actor_loss(batch)
-            loss_pi.backward()
-            torch.nn.utils.clip_grad_norm_(actor.parameters(), max_norm=1.0)
-            optim_policy.step()
+    evaler.eval()  # pre-train eval
 
-            # value 更新
-            optim_value.zero_grad()
-            loss_v = loss_module.critic_loss(batch)
-            loss_v.backward()
-            torch.nn.utils.clip_grad_norm_(value.parameters(), max_norm=1.0)
-            optim_value.step()
+    # === Train ===
+    actor, value = trainer.learn()
 
-            # 可选：early stop based on target_kl
-            if target_kl is not None:
-                with torch.no_grad():
-                    approx_kl = loss_module.approx_kl(batch)
-                if torch.mean(approx_kl).item() > 1.5 * float(target_kl):
-                    print(f"[epoch {epoch}] early stop PPO iters: KL={approx_kl.mean().item():.4f}")
-                    break
+    # === Final Eval ===
+    q_mean, q_std, avg_reward, overall_ql_mean, overall_ql_se = evaler.eval()
 
-        # 清空 buffer
-        rb.empty()
+    results = {
+        "q_mean": float(q_mean.item()),
+        "q_std": float(q_std.item()),
+        "avg_reward": avg_reward,
+        "overall_ql_mean": overall_ql_mean,
+        "overall_ql_se": overall_ql_se,
+    }
+    with open("test_cost_list.json", "w") as f:
+        json.dump(results, f)
 
-        # 余弦学习率
-        progress = 1.0 - (epoch + 1) / float(num_epochs)
-        for pg in optim_policy.param_groups:
-            pg["lr"] = cosine_lr(lr_policy, min_lr=min_lr_policy, progress=progress)
-        for pg in optim_value.param_groups:
-            pg["lr"] = cosine_lr(lr_value, min_lr=min_lr_value, progress=progress)
+    print("Training finished. Results saved.")
 
-        # 监控
-        ep_reward = tensordict_data.get(("next", "reward")).mean().item()
-        ep_len = frames / actors
-        print(f"[{epoch+1:04d}/{num_epochs}] frames={global_frames} | ep_len≈{ep_len:.0f} | "
-              f"rew={ep_reward:.4f} | Lpi={loss_pi.item():.4f} | Lv={loss_v.item():.4f} | "
-              f"lr_pi={optim_policy.param_groups[0]['lr']:.2e} lr_v={optim_value.param_groups[0]['lr']:.2e}")
-
-        if epoch + 1 >= num_epochs:
-            break
-
-    # 可选：保存模型参数
-    os.makedirs("checkpoints", exist_ok=True)
-    torch.save({"actor": actor.state_dict(), "value": value.state_dict()}, f"checkpoints/ppo_final.pt")
-    print("Training finished.")
 
 if __name__ == "__main__":
     main()

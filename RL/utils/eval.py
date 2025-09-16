@@ -1,57 +1,14 @@
-import sys
-# sys.path.append('.../')
-from stable_baselines3 import PPO
-import numpy as np
 import torch
+from torch.utils.data import Dataset, DataLoader
 from torch.nn import functional as F
 from tqdm import trange
-from typing import NamedTuple
-from stable_baselines3.common.callbacks import BaseCallback
-from torch.utils.data import Dataset, DataLoader
+import numpy as np
+from torchrl.envs import ParallelEnv
 
-
-
-class Obs(NamedTuple):
-    queues: torch.Tensor
-    time: torch.Tensor
-
-class EnvState(NamedTuple):
-    queues: torch.Tensor
-    time: torch.Tensor
-    service_times: torch.Tensor
-    arrival_times: torch.Tensor
-
-
-# class BCD(Dataset):
-#     def __init__(self, num_samples, network):
-#         self.num_samples = num_samples
-#         self.network = network
-#         self.s = self.network.shape[0]
-#         self.q = self.network.shape[1]
-#
-#     def __len__(self):
-#         return self.num_samples
-#
-#     def __getitem__(self, idx):
-#         # Generate random input data
-#         input_data = np.random.randint(0, 101, self.q)
-#         obs = torch.tensor(input_data)
-#         action_probs = F.softmax(torch.tensor(input_data).float(), dim=-1)
-#         action_probs = action_probs * self.network
-#         action_probs = torch.minimum(action_probs, obs.unsqueeze(0).repeat(1, self.s, 1))
-#         zero_mask = torch.all(action_probs == 0, dim=2).reshape(-1, self.s, 1).repeat(1, 1, self.q)
-#         action_probs = action_probs + zero_mask * self.network
-#         action_probs = action_probs / torch.sum(action_probs, dim=-1).reshape(-1, self.s, 1)
-#         output_data = action_probs
-#         input_tensor = torch.tensor(input_data, dtype=torch.float32).squeeze()
-#         output_tensor = torch.tensor(output_data, dtype=torch.float32).squeeze()
-#
-#         return input_tensor, output_tensor
 
 class BCD(Dataset):
     def __init__(self, num_samples, network):
         self.num_samples = num_samples
-        # network 必须是 (s, q)
         if isinstance(network, torch.Tensor):
             self.network = network.float()
         else:
@@ -63,250 +20,99 @@ class BCD(Dataset):
         return self.num_samples
 
     def __getitem__(self, idx):
-        # obs: (q,)
         obs = torch.randint(0, 101, (self.q,), dtype=torch.float32)
-
-        # teacher target: (s, q)
         base = F.softmax(obs, dim=-1)             # (q,)
         action_probs = base.unsqueeze(0).repeat(self.s, 1)  # (s,q)
-        action_probs = action_probs * self.network          # 可行性掩码
-
-        # 只允许分配到正队列（可选）
+        action_probs = action_probs * self.network
         pos_mask = (obs > 0).float().unsqueeze(0).repeat(self.s, 1)
         action_probs = action_probs * pos_mask
-
-        # 全零行回退
         row_sum = action_probs.sum(dim=-1, keepdim=True).clamp_min(1e-12)
         zero_row = (row_sum <= 1e-12).float()
         action_probs = action_probs + zero_row * self.network
-
-        action_probs = action_probs / action_probs.sum(dim=-1, keepdim=True).clamp_min(1e-12)  # (s,q)
-
-        return obs, action_probs  # 不要 squeeze！
+        action_probs = action_probs / action_probs.sum(dim=-1, keepdim=True).clamp_min(1e-12)
+        return obs, action_probs
 
 
-
-class parallel_eval(BaseCallback):
-    def __init__(self, model, eval_env, eval_freq, eval_t, test_policy, test_seed, init_test_queues, test_batch, device, num_pool, time_f, policy_name, per_iter_normal_obs, env_config_name, bc, randomize = True, 
+class ParallelEvalTorchRL:
+    def __init__(self, actor, make_env_fn, eval_freq, eval_t, test_seed,
+                 test_batch, device, bc=False, per_iter_normal_obs=False,
                  verbose=1):
-        super(parallel_eval, self).__init__(verbose)
-        self.model = model
-        self.eval_env = eval_env
+        self.actor = actor
+        self.make_env_fn = make_env_fn
         self.eval_freq = eval_freq
         self.eval_t = eval_t
-        print('eval_t', eval_t)
-        self.test_policy = test_policy
         self.test_seed = test_seed
-        self.init_test_queues = init_test_queues
         self.test_batch = test_batch
         self.device = device
-        self.num_pool = num_pool
-        self.randomize = randomize
-        self.time_f = time_f
-        self.policy_name = policy_name
-        self.test_costs = []  
-        self.final_costs = []
-        self.per_iter_normal_obs = per_iter_normal_obs
-        self.env_config_name = env_config_name
         self.bc = bc
-        print(f'eval env config name: {self.env_config_name}')
+        self.per_iter_normal_obs = per_iter_normal_obs
+        self.verbose = verbose
         self.iter = 0
 
-        self.lex_batch = []
-        self.obs_batch = []
-        self.state_batch = []
-        self.total_cost_batch = []
-        self.time_weight_queue_len_batch = []
+        # 构造 test 环境
+        env_fns = [lambda s=seed: self.make_env_fn(s)
+                   for seed in range(test_seed, test_seed + test_batch)]
+        self.eval_env = ParallelEnv(test_batch, env_fns).to(device)
 
-
-
-
-    
-    def behavior_cloning(self):
-
+    def behavior_cloning(self, network):
         print(f'---------------------behavior_cloning---------------------')
-        if hasattr(self.model.policy, "log_std"):
-            self.optimizer_policy = torch.optim.Adam([
-                {'params': self.model.policy.log_std},
-                {'params': self.model.policy.features_extractor.parameters()},
-                {'params': self.model.policy.pi_features_extractor.parameters()},
-                {'params': self.model.policy.mlp_extractor.policy_net.parameters()},
-                {'params': self.model.policy.action_net.parameters()}
-            ], lr=3e-4)
+        dataset = BCD(num_samples=100000, network=network)
+        loader = DataLoader(dataset, batch_size=self.test_batch, shuffle=True)
+        optim = torch.optim.Adam(self.actor.parameters(), lr=3e-4)
 
-        else:
-            self.model.optimizer_policy = torch.optim.Adam([
-                {'params': self.model.policy.features_extractor.parameters()},
-                {'params': self.model.policy.pi_features_extractor.parameters()},
-                {'params': self.model.policy.mlp_extractor.policy_net.parameters()},
-                {'params': self.model.policy.action_net.parameters()}
-            ], lr=3e-4)
-
-        # print(f'network: {self.eval_env[0].network}, shape: {self.eval_env[0].network[0].shape}')
-        BCD_dataset = BCD(num_samples = 100000, network = self.eval_env[0].network[0])
-        BCD_loader = DataLoader(BCD_dataset, batch_size = self.test_batch, shuffle = True)
-
-        for i, (obs, target) in enumerate(BCD_loader):
-            self.optimizer_policy.zero_grad()
-            action, action_probs = self.model.policy.get_prob_act(obs)
-            loss = F.mse_loss(action_probs, target)
+        for obs, target in loader:
+            obs, target = obs.to(self.device), target.to(self.device)
+            optim.zero_grad()
+            dist = self.actor(obs)
+            # 假设 actor 输出 dist，支持 log_prob/probs
+            probs = dist.probs
+            loss = F.mse_loss(probs, target)
             loss.backward()
-            self.optimizer_policy.step()
+            optim.step()
 
-    def pre_train_eval(self):
-        print('pre_train_eval')
-        if self.bc:
-            self.behavior_cloning()
-        # self.behavior_cloning()
-        q_mean, q_std, t_mean, t_max, t_min, t_std = self.eval()
-
-        self.model.policy.update_mean_std(mean_queue_length = q_mean, std_queue_length = q_std)
-        print(f'------- pre train eval -------')
-        print(f"mean_queue_length: {self.model.policy.mean_queue_length}")
-        print(f"std_queue_length: {self.model.policy.std_queue_length}")
-
-        return True
-
-    def _on_step(self) -> bool:
-        if self.per_iter_normal_obs:
-            if (self.n_calls) % self.eval_freq == 0:
-                q_mean, q_std, t_mean, t_max, t_min, t_std = self.eval()
-
-                self.model.policy.update_mean_std(mean_queue_length = q_mean, std_queue_length = q_std)
-                print(f"mean_queue_length: {self.model.policy.mean_queue_length}")
-                print(f"std_queue_length: {self.model.policy.std_queue_length}")
-        else:
-            if (self.n_calls) % self.eval_freq == 0:
-                self.eval()
-                print(f"mean_queue_length: {self.model.policy.mean_queue_length}")
-                print(f"std_queue_length: {self.model.policy.std_queue_length}")
-
-                se_queue_length = self.model.policy.std_queue_length / torch.sqrt(torch.tensor(float(self.test_batch)))
-                print(f'se_queue_length: {se_queue_length}')
-
-        return True
-    
-
+    @torch.no_grad()
     def eval(self):
         self.iter += 1
-        print(f'iter: {self.iter}')
+        if self.verbose:
+            print(f'iter: {self.iter}')
 
-        lex_batch, obs_batch, state_batch, total_cost_batch, time_weight_queue_len_batch = self.construct_batch()
-        test_dq_batch = self.eval_env
+        td = self.eval_env.reset()
+        total_rewards = torch.zeros(self.test_batch, device=self.device)
+        total_time = torch.zeros(self.test_batch, device=self.device)
+        time_weighted_qlen = None
 
-        with torch.no_grad():
-            for tt in trange(self.eval_t):
-                # print(tt)
-                # print(f'---------------------')
-                # print(f'obs:')
-                # for obs in obs_batch:
-                #     print(f'{obs}')
+        for _ in trange(self.eval_t):
+            dist = self.actor(td)
+            td.set("action", dist.sample())
+            td = self.eval_env.step(td)
 
+            reward = td["next", "reward"].squeeze(-1)
+            total_rewards += reward
 
-                batch_queue = torch.cat([obs[0] for obs in obs_batch], dim = 0).reshape(self.test_batch,-1)
-                # batch_queue = torch.cat([
-                #     obs if obs.dim() == 2 else obs.unsqueeze(0)
-                #     for obs in obs_batch
-                # ], dim=0)  # (B, q)
+            queues = td["next", "queues"]
+            dt = td["next", "time"].squeeze(-1)
+            if time_weighted_qlen is None:
+                time_weighted_qlen = torch.zeros(
+                    self.test_batch, queues.shape[-1], device=self.device
+                )
+            time_weighted_qlen += queues * dt.unsqueeze(-1)
+            total_time += dt
+            td = td["next"]
 
-                # print(f'batch_queue: {batch_queue}')
+        avg_reward = total_rewards.mean().item()
+        qlen_per_env = time_weighted_qlen / total_time.unsqueeze(-1)
+        avg_qlen_per_queue = qlen_per_env.mean(0)
+        overall_ql_mean = qlen_per_env.mean(1).mean().item()
+        overall_ql_std = qlen_per_env.mean(1).std(unbiased=True).item()
+        overall_ql_se = overall_ql_std / np.sqrt(self.test_batch)
 
-                raw_actions, probs = self.model.predict(batch_queue)
-                action = torch.tensor(raw_actions).float().to(self.device)
-                
-                for test_dq_idx in range(len(test_dq_batch)):
-                    # step_time_start = time.time()
-                    _, _, _, _, info = test_dq_batch[test_dq_idx].step(action[test_dq_idx])
-                    # step_time_end = time.time()
-                    # print(f'step time: {step_time_end - step_time_start}')
-                    obs_batch[test_dq_idx], state_batch[test_dq_idx], cost, event_time  = info['obs'], info['state'], info['cost'], info['event_time']
-                    total_cost_batch[test_dq_idx] = total_cost_batch[test_dq_idx] + cost
-                    time_weight_queue_len_batch[test_dq_idx] = time_weight_queue_len_batch[test_dq_idx] + info['queues'] * info['event_time']
+        if self.verbose:
+            print("------ TorchRL Eval ------")
+            print(f"avg reward: {avg_reward:.4f}")
+            print(f"avg queue length per q: {avg_qlen_per_queue.cpu().numpy().round(4).tolist()}")
+            print(f"overall avg queue length: {overall_ql_mean:.6f}")
+            print(f"overall queue length SE:  {overall_ql_se:.6f}")
 
-        # Test cost metrics
-        # pdb.set_trace()
-        test_cost_batch = [total_cost_batch[test_dq_idx] / state_batch[test_dq_idx].time for test_dq_idx in range(len(test_dq_batch))]
-        test_cost = torch.mean(torch.concat(test_cost_batch))
-        test_std = torch.std(torch.concat(test_cost_batch))
-        test_queue_len = torch.mean(torch.concat([time_weight_queue_len_batch[test_dq_idx] / state_batch[test_dq_idx].time for test_dq_idx in range(len(test_dq_batch))]), dim = 0)
-        test_queue_len = [float(_item) for _item in test_queue_len.to('cpu').detach().numpy().tolist()]
-        print(f'------------------------------test---------------------------------')
-        print(f"queue lengths: \t{test_queue_len}")
-
-        # 先得到每个并行环境的时间加权平均队长 [B, q]
-        qlen_per_env = torch.concat(
-            [time_weight_queue_len_batch[i] / state_batch[i].time for i in range(len(test_dq_batch))],
-            dim=0
-        )  # shape [B, q]
-        # 跨 batch 取均值/标准差/标准误（逐队列）
-        # qlen_mean = qlen_per_env.mean(dim=0)  # [q]
-        # qlen_std = qlen_per_env.std(dim=0, unbiased=True)  # [q]
-        # n = torch.tensor(qlen_per_env.shape[0], dtype=qlen_per_env.dtype, device=qlen_per_env.device)
-        # qlen_se = qlen_std / torch.sqrt(n)
-        # 如果你还想给“整体平均队长”的标量及其SE（可选）
-        # overall_ql_mean = qlen_mean.mean()
-        # overall_ql_se = qlen_se.mean()
-        # print(f"overall avg queue length:       \t{overall_ql_mean.item():.6f}  (SE {overall_ql_se.item():.6f})")
-
-        # ---- 关键修改：总体队长均值 + 总体SE ----
-        # 每个环境先算整体平均队长 (把 q 个队列均值)
-        overall_ql_per_env = qlen_per_env.mean(dim=1)  # [B]
-        overall_ql_mean = overall_ql_per_env.mean()  # 标量
-        overall_ql_std = overall_ql_per_env.std(unbiased=True)
-        overall_ql_se = overall_ql_std / np.sqrt(len(test_dq_batch))
-
-        print(f"overall avg queue length: {overall_ql_mean.item():.6f}")
-        print(f"overall queue length SE:  {overall_ql_se.item():.6f}")
-
-
-        print(f"test cost: \t{test_cost}")
-        print(f"test cost std: \t{test_std}")
-
-        test_se = test_std / np.sqrt(len(test_dq_batch))
-        print(f"len test dq batch {len(test_dq_batch)}, test cost se: \t{test_se}")
-
-
-        test_queue_len = torch.tensor(test_queue_len)
-
-        q_mean = torch.mean(test_queue_len)
-        # q_std = torch.std(test_queue_len)
-
-        if test_queue_len.numel() > 1:
-            q_std = torch.std(test_queue_len)
-        else:
-            q_std = torch.tensor(0.0)
-
-        t_mean = torch.mean(state_batch[0].time)
-        t_max = torch.max(state_batch[0].time)
-        t_min = torch.min(state_batch[0].time)
-        t_std = torch.std(state_batch[0].time)
-        
-        return q_mean, q_std, t_mean, t_max, t_min, t_std
-
-    def construct_batch(self):
-        lex_batch = []
-        obs_batch = []
-        state_batch = []
-        total_cost_batch = []
-        time_weight_queue_len_batch = []
-
-
-        for dq_idx in range(self.test_batch):
-
-            dq = self.eval_env[dq_idx]
-            lex = torch.zeros(dq.batch, dq.s, dq.q)
-            obs, state = dq.reset(seed = dq.seed)
-            obs = torch.tensor(obs).to(self.device)
-            if obs.dim() == 1:
-                obs = obs.unsqueeze(0)  # (q,) -> (1, q)
-            total_cost = torch.tensor([[0.]])
-            time_weight_queue_len = torch.tensor([[0.]])
-
-            lex_batch.append(lex)
-            obs_batch.append(obs)
-            state_batch.append(state)
-            total_cost_batch.append(total_cost)
-            time_weight_queue_len_batch.append(time_weight_queue_len)
-
-        
-        return lex_batch, obs_batch, state_batch, total_cost_batch, time_weight_queue_len_batch
+        q_mean = avg_qlen_per_queue.mean()
+        q_std = avg_qlen_per_queue.std(unbiased=True)
+        return q_mean, q_std, avg_reward, overall_ql_mean, overall_ql_se
