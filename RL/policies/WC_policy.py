@@ -84,6 +84,15 @@ class WC_Policy(nn.Module):
         self.mean_queue_length = float(mean_queue_length)
         self.std_queue_length = float(std_queue_length)
 
+    def forward_td(self, queues: torch.Tensor, time: torch.Tensor | None = None, deterministic: bool = False):
+        """
+        TorchRL 适配：输入是 env 的观测里的 queues（可选还有 time），
+        输出 (action, sample_log_prob)。这里我们忽略 time（你的模型按 q 维建的）。
+        """
+        action, values, log_prob = self.forward(queues, deterministic=deterministic)
+        # ClipPPOLoss 默认读取 "sample_log_prob"
+        return action, log_prob
+
     def standardize_queues(self, queues: Tensor) -> Tensor:
         # 标准化，不反传统计量
         standardization = (queues - self.mean_queue_length) / (self.std_queue_length + 1e-8)

@@ -1,3 +1,5 @@
+# train_torchrl.py
+
 import sys
 import os
 import time
@@ -14,12 +16,13 @@ sys.path.append(RL_root)
 
 from RL.utils.rl_env import load_rl_p_env
 from RL.policies.WC_policy import WC_Policy
-
-
 from RL.policies.vanilla_policy import Vanilla_Policy
 from RL.PPO.trainer import TorchRLPPOTrainer
 from RL.utils.eval import ParallelEvalTorchRL
 from RL.utils.count_time import count_time
+
+# 关键：TorchRL 0.6 的 TensorDictModule 在 tensordict.nn
+from tensordict.nn import TensorDictModule
 
 
 def main():
@@ -27,10 +30,10 @@ def main():
 
     config_file_name = sys.argv[1]
     env_config_name = sys.argv[2]
-
     if not config_file_name.endswith(".yaml"):
         config_file_name += ".yaml"
 
+    # === 读取配置 ===
     config_file_path = os.path.join(RL_root, "policy_configs", config_file_name)
     with open(config_file_path, "r") as f:
         config = yaml.safe_load(f)
@@ -44,7 +47,7 @@ def main():
     env_type = env_config.get("env_type", name)
     print(f"name: {name}, env_type: {env_type}")
 
-    # === Load env data ===
+    # === 环境数据 ===
     if env_config["network"] is None:
         network_path = os.path.join(project_root, "configs", "env_data", env_type, f"{env_type}_network.npy")
         network = np.load(network_path)
@@ -61,14 +64,14 @@ def main():
     mu = torch.tensor(mu, dtype=torch.float32)
     orig_s, orig_q = network.size()
 
-    # repeat for server pools
+    # server pools
     num_pool = env_config["num_pool"]
     network = network.repeat_interleave(num_pool, dim=0)
     mu = mu.repeat_interleave(num_pool, dim=0)
 
     init_test_queues = torch.tensor([env_config["init_queues"]], dtype=torch.float32)
 
-    # === Env hyperparams ===
+    # === 超参 ===
     device = torch.device(config["env"]["device"])
     test_seed = config["env"]["test_seed"]
     train_seed = config["env"]["train_seed"]
@@ -79,7 +82,6 @@ def main():
 
     print(f"device={device}, test_seed={test_seed}, train_seed={train_seed}, policy_name={policy_name}")
 
-    # === Training hyperparams ===
     actors = config["training"]["actors"]
     num_epochs = config["training"]["num_epochs"]
     episode_steps = config["training"]["episode_steps"]
@@ -113,57 +115,78 @@ def main():
             temp=env_temp,
             batch=1,
             seed=seed,
-            policy_name=policy_name,
+            policy_name=policy_name,  # 这个参数在你的 loader 里现在无所谓了
             device=device,
         )
 
-    # raw env for D options
     dq_raw = make_env(train_seed)
 
-    # === Policy Networks ===
+    # === 策略网络结构 ===
     L = orig_q
     J = orig_s
     gmLJ = int(np.sqrt(L * J))
     pi_arch = [scale * L, scale * gmLJ, scale * J]
     vi_arch = [scale * L, scale * gmLJ, scale * J]
-
     print(f"pi_arch={pi_arch}, vi_arch={vi_arch}")
 
     policy_kwargs = dict(
         activation_fn=nn.Tanh,
-        network=network,
+        network=network,            # (s,q)
         time_f=time_f,
         randomize=randomize,
         scale=scale,
         rescale_v=config["training"]["rescale_v"],
-        alpha=0,
-        D=dq_raw.queue_event_options,
-        mu=mu,
+        alpha=0,                    # 你的 WC_Policy 内部会扩展成 (q,)
+        D=dq_raw.queue_event_options,  # (2q,q)
+        mu=mu,                      # (s,q)
         net_arch=dict(pi=pi_arch, vf=vi_arch),
     )
 
+    # === 基类策略（保持你的实现）===
     if policy_name == "WC":
-        PolicyClass = WC_Policy
+        BasePolicyClass = WC_Policy
     elif policy_name == "vanilla":
-        PolicyClass = Vanilla_Policy
+        BasePolicyClass = Vanilla_Policy
     else:
         raise ValueError(f"Unknown policy {policy_name}")
 
-    actor = PolicyClass(**policy_kwargs).to(device)
-    value = nn.Sequential(
-        nn.Linear(L, vi_arch[0]),
-        nn.Tanh(),
-        nn.Linear(vi_arch[0], vi_arch[1]),
-        nn.Tanh(),
-        nn.Linear(vi_arch[1], vi_arch[2]),
-        nn.Tanh(),
-        nn.Linear(vi_arch[2], 1),
+    base_policy = BasePolicyClass(**policy_kwargs).to(device)
+
+    # === 用 TensorDictModule 适配成 TorchRL 可用的 actor / value ===
+    # 注意：Env 的 observation keys 是 {"queues","time"}，我们只用 queues
+    class PolicyTDAdapter(nn.Module):
+        def __init__(self, pol):
+            super().__init__()
+            self.pol = pol
+        def forward(self, queues: torch.Tensor):
+            # 返回 action(one-hot, B,s,q) & sample_log_prob(B,)
+            action, _, log_prob = self.pol.forward(queues, deterministic=False)
+            return action, log_prob
+
+    actor_td = TensorDictModule(
+        module=PolicyTDAdapter(base_policy),
+        in_keys=["queues"],                      # 只喂 queues
+        out_keys=["action", "sample_log_prob"],  # ClipPPOLoss 期望的 key
     ).to(device)
 
-    # === Trainer ===
+    class ValueHead(nn.Module):
+        def __init__(self, pol):
+            super().__init__()
+            self.pol = pol
+        def forward(self, queues: torch.Tensor):
+            v = self.pol.predict_values(queues)
+            return v
+
+    value_td = TensorDictModule(
+        module=ValueHead(base_policy),
+        in_keys=["queues"],
+        out_keys=["state_value"],
+    ).to(device)
+
+    # === Trainer（传入 TensorDict 版本的 actor/value）===
     trainer = TorchRLPPOTrainer(
-        actor=actor,
-        value=value,
+        actor=actor_td,
+        value=value_td,
         env=make_env(train_seed),
         lr_policy=lr_policy,
         lr_value=lr_value,
@@ -183,9 +206,9 @@ def main():
         ct=ct,
     )
 
-    # === Eval ===
+    # === Eval（这里仍然用你原来的基类策略，避免改 ParallelEvalTorchRL）===
     evaler = ParallelEvalTorchRL(
-        actor=actor,
+        actor=base_policy,  # 注意这里传基类策略（它有 predict/get_prob_act）
         make_env_fn=lambda seed: make_env(seed),
         eval_freq=eval_freq,
         eval_t=test_T,
@@ -200,7 +223,7 @@ def main():
     evaler.eval()  # pre-train eval
 
     # === Train ===
-    actor, value = trainer.learn()
+    _, _ = trainer.learn()
 
     # === Final Eval ===
     q_mean, q_std, avg_reward, overall_ql_mean, overall_ql_se = evaler.eval()
