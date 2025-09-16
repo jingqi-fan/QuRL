@@ -4,7 +4,7 @@ from torch.nn import functional as F
 from tqdm import trange
 import numpy as np
 from torchrl.envs import ParallelEnv
-
+from torchrl.envs import SerialEnv
 
 class BCD(Dataset):
     def __init__(self, num_samples, network):
@@ -52,7 +52,8 @@ class ParallelEvalTorchRL:
         # 构造 test 环境
         env_fns = [lambda s=seed: self.make_env_fn(s)
                    for seed in range(test_seed, test_seed + test_batch)]
-        self.eval_env = ParallelEnv(test_batch, env_fns).to(device)
+        # self.eval_env = ParallelEnv(test_batch, env_fns).to(device)
+        self.eval_env = SerialEnv(test_batch, env_fns).to(device)
 
     def behavior_cloning(self, network):
         print(f'---------------------behavior_cloning---------------------')
@@ -80,12 +81,46 @@ class ParallelEvalTorchRL:
         total_rewards = torch.zeros(self.test_batch, device=self.device)
         total_time = torch.zeros(self.test_batch, device=self.device)
         time_weighted_qlen = None
+        # print(f'self.actor(td): {self.actor(td):.3f}')
+
+        # for _ in trange(self.eval_t):
+        #
+        #     dist = self.actor(td)
+        #     td.set("action", dist.sample())
+        #     td = self.eval_env.step(td)
+        #
+        #     reward = td["next", "reward"].squeeze(-1)
+        #     total_rewards += reward
+        #
+        #     queues = td["next", "queues"]
+        #     dt = td["next", "time"].squeeze(-1)
+        #     if time_weighted_qlen is None:
+        #         time_weighted_qlen = torch.zeros(
+        #             self.test_batch, queues.shape[-1], device=self.device
+        #         )
+        #     time_weighted_qlen += queues * dt.unsqueeze(-1)
+        #     total_time += dt
+        #     td = td["next"]
 
         for _ in trange(self.eval_t):
-            dist = self.actor(td)
-            td.set("action", dist.sample())
+            # -------- 取观测 --------
+            queues = td["queues"]  # shape [q]
+            time = td["time"]  # shape [1]
+            # 如果策略需要拼上时间特征（例如 q+1 输入），在这里拼
+            if getattr(self.actor, "use_time", False) or getattr(self.actor, "time_f", False):
+                obs = torch.cat([queues, time], dim=-1)  # shape [q+1]
+            else:
+                obs = queues  # shape [q]
+
+            # -------- 策略前向 --------
+            with torch.no_grad():
+                action, value, log_prob = self.actor(obs)
+
+            # -------- 写回动作，交给环境 --------
+            td.set("action", action)
             td = self.eval_env.step(td)
 
+            # -------- 累积统计 --------
             reward = td["next", "reward"].squeeze(-1)
             total_rewards += reward
 
@@ -97,6 +132,8 @@ class ParallelEvalTorchRL:
                 )
             time_weighted_qlen += queues * dt.unsqueeze(-1)
             total_time += dt
+
+            # -------- 进入下一步 --------
             td = td["next"]
 
         avg_reward = total_rewards.mean().item()

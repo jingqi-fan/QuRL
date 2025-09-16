@@ -1,5 +1,6 @@
 import numpy as np
 import torch
+from tensordict import TensorDictBase
 from torch import nn
 import torch.nn.functional as F
 from typing import Any, Dict, Optional, Tuple, Union
@@ -138,6 +139,18 @@ class WC_Policy(nn.Module):
         # 与原实现保持一致：若 time_f=True，丢弃最后一列
         return obs[:, :-1] if self.time_f and obs.size(1) > 0 else obs
 
+    def _ensure_obs_tensor(self, obs):
+        if isinstance(obs, TensorDictBase):
+            queues = obs.get("queues")
+            t = obs.get("time", None)
+            if (getattr(self, "time_f", False) or getattr(self, "use_time", False)) and t is not None:
+                obs = torch.cat([queues, t], dim=-1)  # [..., q+1]
+            else:
+                obs = queues  # [..., q]
+        if obs.dim() == 1:
+            obs = obs.unsqueeze(0)  # (1, D)
+        return obs.reshape(obs.shape[0], -1)  # (B, D)
+
     # ====== 前向（给 PPO 用） ======
     def forward(self, obs: Tensor, deterministic: bool = False) -> Tuple[Tensor, Tensor, Tensor]:
         """
@@ -146,9 +159,15 @@ class WC_Policy(nn.Module):
           - values: (B, 1)
           - log_prob: (B,)
         """
-        # obs 形状整理
-        obs = obs.view(-1, self.q)
-        obs_for_mask = obs  # 用于可服务掩码
+        # # obs 形状整理
+        # obs = obs.view(-1, self.q)
+        # obs_for_mask = obs  # 用于可服务掩码
+
+        # 1) 统一输入
+        obs = self._ensure_obs_tensor(obs)  # (B, q) 或 (B, q+1)
+        # 掩码只看前 q 列（原始队列，不含 time 特征）
+        obs_for_mask = obs[..., : self.q]
+
         input_obs = self.standardize_queues(self._maybe_time_feature_crop(obs))
 
         logits = self._policy_logits(input_obs)          # (B, s, q)
