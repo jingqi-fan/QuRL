@@ -6,9 +6,9 @@ import numpy as np
 import torch as th
 from gymnasium import spaces
 
-from stable_baselines3.common.buffers import DictRolloutBuffer, RolloutBuffer
+from stable_baselines3.common.buffers import RolloutBuffer
 from stable_baselines3.common.callbacks import BaseCallback
-from stable_baselines3.common.utils import obs_as_tensor, safe_mean
+from stable_baselines3.common.utils import obs_as_tensor
 from stable_baselines3.common.vec_env import VecEnv
 
 
