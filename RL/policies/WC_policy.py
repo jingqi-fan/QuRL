@@ -1,356 +1,287 @@
-import sys
-# sys.path.append('../')
-from stable_baselines3.common.type_aliases import PyTorchObs
 import numpy as np
-import torch.nn.functional as F
 import torch
-import torch.distributions.one_hot_categorical as one_hot_sample
-from stable_baselines3.common.policies import ActorCriticCnnPolicy, ActorCriticPolicy, MultiInputActorCriticPolicy
-from typing import Any, Dict, List, Optional, Tuple, Type, TypeVar, Union
+from torch import nn
+import torch.nn.functional as F
+from typing import Any, Dict, Optional, Tuple, Union
+from torch.distributions import OneHotCategorical
+
+Tensor = torch.Tensor
 
 
-class WC_Policy(ActorCriticPolicy):
-    def __init__(self, *args, network: torch.Tensor = None, randomize: bool = False, time_f: bool = False, scale, rescale_v, alpha, mu, D, **kwargs):
-        super(WC_Policy, self).__init__(*args, **kwargs)
-        # Store the custom parameter
+def build_mlp(in_dim: int, hidden: list[int], out_dim: int, activation=nn.Tanh) -> nn.Sequential:
+    layers: list[nn.Module] = []
+    prev = in_dim
+    for h in hidden:
+        layers += [nn.Linear(prev, h), activation()]
+        prev = h
+    layers += [nn.Linear(prev, out_dim)]
+    return nn.Sequential(*layers)
+
+
+class WC_Policy(nn.Module):
+    """
+    纯 PyTorch 版本（TorchRL 友好）的 WC_Policy。
+    - 输入: obs (B, q)
+    - 输出: forward -> action(one-hot, B,s,q), values(B,1), log_prob(B,)
+    - 另外提供: predict, evaluate_actions, evaluate_values, predict_values, AMP, predict_next_states
+    """
+
+    def __init__(
+        self,
+        *,
+        network: Tensor,
+        randomize: bool = False,
+        time_f: bool = False,
+        scale: int,
+        rescale_v: bool,
+        alpha,
+        mu: Tensor,
+        D: Tensor,
+        net_arch: Dict[str, list[int]],
+        activation_fn=nn.Tanh,
+        **kwargs: Any,
+    ):
+        super().__init__()
+
+        # 常量/环境参数
         self.randomize = randomize
-        self.network = network
-        self.q = self.network.size()[1]
-        self.s = self.network.size()[0]
         self.time_f = time_f
-        self.mean_queue_length = 0
-        self.std_queue_length = 1
-        self.returns_mean = 0
-        self.returns_std = 1
-        self.printing = False
         self.rescale_v = rescale_v
-        self.alpha = torch.tensor(alpha)
-        self.mu = mu.unsqueeze(0)
-        self.D = D
 
-        print(f'self.alpha: {self.alpha}')
-        print(f'self.mu: {self.mu}')
-        print(f'self.D: {self.D}')        
+        # 网络拓扑 (s, q)
+        self.q = network.size(1)
+        self.s = network.size(0)
 
-    def update_mean_std(self, mean_queue_length, std_queue_length):
-        self.mean_queue_length = mean_queue_length
-        self.std_queue_length = std_queue_length
+        # 训练期统计量
+        self.mean_queue_length = 0.0
+        self.std_queue_length = 1.0
+        self.returns_mean = 0.0
+        self.returns_std = 1.0
 
-    def standardize_queues(self, queues):
-        # Standardize the queue lengths
+        # 注册为 buffer，确保 .to(device) 时一起搬运到 GPU，且不参与梯度
+        self.register_buffer("network", network.float())                  # (s, q)
+        # alpha 可能传标量或向量；统一成 (q,) 向量
+        alpha = torch.as_tensor(alpha, dtype=torch.float32)
+        if alpha.ndim == 0:
+            alpha = alpha.repeat(self.q)
+        assert alpha.numel() == self.q, f"alpha size must be q={self.q}, got {alpha.numel()}"
+        self.register_buffer("alpha", alpha)                              # (q,)
+        self.register_buffer("mu", mu.float().unsqueeze(0))               # (1, s, q)
+        self.register_buffer("D", D.float())                              # (2q, q)
+
+        # 策略/价值网络（内部 value 主要给 AMP / predict_values 用）
+        pi_hidden = net_arch.get("pi", [])
+        vf_hidden = net_arch.get("vf", [])
+
+        self.policy_mlp = build_mlp(self.q, pi_hidden, self.s * self.q, activation=activation_fn)
+        self.value_mlp = build_mlp(self.q, vf_hidden, 1, activation=activation_fn)
+
+        # 打印检查
+        # print(f"alpha: {self.alpha.shape}, mu: {self.mu.shape}, D: {self.D.shape}, network: {self.network.shape}")
+
+    # ====== 统计量维护 ======
+    def update_mean_std(self, mean_queue_length: float, std_queue_length: float):
+        self.mean_queue_length = float(mean_queue_length)
+        self.std_queue_length = float(std_queue_length)
+
+    def standardize_queues(self, queues: Tensor) -> Tensor:
+        # 标准化，不反传统计量
         standardization = (queues - self.mean_queue_length) / (self.std_queue_length + 1e-8)
-        standardization.detach()
-
+        _ = standardization.detach()  # 与原实现保持一致（虽未赋值，但不影响结果）
         return standardization.float()
-    
-    def update_rollout_stats(self, returns_mean, returns_std):
-        print("update rollout stats")
-        self.returns_mean = returns_mean
-        self.returns_std = returns_std
 
-    def rescale_values(self, values):
-        scaled_values =  values * self.returns_std + self.returns_mean
-        return scaled_values
+    def update_rollout_stats(self, returns_mean: float, returns_std: float):
+        self.returns_mean = float(returns_mean)
+        self.returns_std = float(returns_std)
 
-    
+    def rescale_values(self, values: Tensor) -> Tensor:
+        return values * self.returns_std + self.returns_mean
 
-    def forward(self, obs: torch.Tensor, deterministic: bool = False):
+    # ====== 基础计算 ======
+    def _policy_logits(self, obs: Tensor) -> Tensor:
+        """
+        obs: (B, q)
+        return: logits (B, s, q)
+        """
+        logits = self.policy_mlp(obs)                    # (B, s*q)
+        return logits.view(-1, self.s, self.q)
+
+    def _masked_action_probs(self, obs_raw: Tensor, logits: Tensor) -> Tensor:
+        """
+        obs_raw: (B, q) 未裁切的原 obs（用于可服务约束）
+        logits: (B, s, q)
+        return: 归一化后的概率 (B, s, q)，已做 network & 可服务队列掩码
+        """
+        # 在这里做了 work conserving (wc)
+        action_probs = F.softmax(logits, dim=-1)         # (B, s, q)
+        action_probs = action_probs * self.network       # 按网络拓扑掩码
+        # 受队列可服务数量限制: prob <= obs
+        action_probs = torch.minimum(action_probs, obs_raw.unsqueeze(1).repeat(1, self.s, 1))
+        # 若某行全 0，用 network 作为回退（与原实现一致）
+        zero_mask = torch.all(action_probs == 0, dim=2).unsqueeze(-1).repeat(1, 1, self.q)
+        action_probs = action_probs + zero_mask * self.network
+        # 归一化
+        denom = torch.sum(action_probs, dim=-1, keepdim=True).clamp_min(1e-12)
+        action_probs = action_probs / denom
+        return action_probs
+
+    def _maybe_time_feature_crop(self, obs: Tensor) -> Tensor:
+        # 与原实现保持一致：若 time_f=True，丢弃最后一列
+        return obs[:, :-1] if self.time_f and obs.size(1) > 0 else obs
+
+    # ====== 前向（给 PPO 用） ======
+    def forward(self, obs: Tensor, deterministic: bool = False) -> Tuple[Tensor, Tensor, Tensor]:
+        """
+        返回:
+          - action: (B, s, q) one-hot
+          - values: (B, 1)
+          - log_prob: (B,)
+        """
+        # obs 形状整理
         obs = obs.view(-1, self.q)
+        obs_for_mask = obs  # 用于可服务掩码
+        input_obs = self.standardize_queues(self._maybe_time_feature_crop(obs))
 
-        input_obs = self.standardize_queues(obs)
-        features = self.extract_features(input_obs)
-        if self.share_features_extractor:
-            latent_pi, latent_vf = self.mlp_extractor(features)
-        else:
-            pi_features, vf_features = features
-            latent_pi = self.mlp_extractor.forward_actor(pi_features)
-            latent_vf = self.mlp_extractor.forward_critic(vf_features)
-        values = self.value_net(latent_vf)        
-        logits = self.action_net(latent_pi)
-        action = logits.reshape((-1, *self.action_space.shape))
-        action_probs = F.softmax(action, dim=-1)
+        logits = self._policy_logits(input_obs)          # (B, s, q)
+        action_probs = self._masked_action_probs(obs_for_mask, logits)
 
-        if self.rescale_v: 
+        # 价值
+        values = self.value_mlp(input_obs)               # (B, 1)
+        if self.rescale_v:
             values = self.rescale_values(values)
 
-
-        action_probs = action_probs * self.network
-        
-        action_probs = torch.minimum(action_probs, obs.unsqueeze(1).repeat(1, self.s, 1))
-        zero_mask = torch.all(action_probs == 0, dim=2).reshape(-1, self.s, 1).repeat(1, 1, self.q)
-        action_probs = action_probs + zero_mask * self.network
-        action_probs = action_probs / torch.sum(action_probs, dim=-1).reshape(-1, self.s, 1)
-        # check if is nan of action probs:
-        if torch.isnan(action_probs).any():
-        # print all the weights of policy net with named parameters, obs, and input_obs
-            print("nan in action_probs")
-            print(f'obs: {obs}')
-            print(f'input_obs: {input_obs}')
-            print(f'policy_net weights')
-            for name, param in self.mlp_extractor.named_parameters():
-                print(name, param)
-            for name, param in self.action_net.named_parameters():
-                print(name, param)
-            for name, param in self.value_net.named_parameters():
-                print(name, param)
-            
-        # Call the parent class's forward method
-        if self.time_f:
-            # dont take the last slice of the observation, i.e if shape (50,4), we only need (50,3)
-            obs = obs[:,:-1]
-
-        # randomize policy or not
-        if self.randomize:
-            action = one_hot_sample.OneHotCategorical(probs = action_probs).sample()
+        # 采样/贪心
+        if self.randomize and not deterministic:
+            dist = OneHotCategorical(probs=action_probs)
+            action = dist.sample()                       # (B, s, q) one-hot
         else:
-            action_indices = torch.argmax(action_probs, dim=-1)
-            action = F.one_hot(action_indices, num_classes=action_probs.shape[-1])
+            action_indices = torch.argmax(action_probs, dim=-1)       # (B, s)
+            action = F.one_hot(action_indices, num_classes=self.q).float()
 
-
-        selected_probs = action * action_probs
-        selected_probs_sum = selected_probs.sum(dim=-1)
-        log_prob = torch.log(selected_probs_sum)
-        log_prob = log_prob.sum(dim=1)
+        # log_prob（对所有 server 维度求和）
+        selected_probs_sum = (action * action_probs).sum(dim=-1).clamp_min(1e-8)  # (B, s)
+        log_prob = torch.log(selected_probs_sum).sum(dim=1)                        # (B,)
 
         return action, values, log_prob
 
-    def get_prob_act(self, obs: torch.Tensor, deterministic: bool = False):
+    # ====== 概率+动作（用于 predict） ======
+    def get_prob_act(self, obs: Tensor, deterministic: bool = False) -> Tuple[Tensor, Tensor]:
         obs = obs.view(-1, self.q)
-        input_obs = self.standardize_queues(obs)
-        features = self.extract_features(input_obs)
-        if self.share_features_extractor:
-            latent_pi, latent_vf = self.mlp_extractor(features)
-        else:
-            pi_features, vf_features = features
-            latent_pi = self.mlp_extractor.forward_actor(pi_features)
-            latent_vf = self.mlp_extractor.forward_critic(vf_features)
-        logits = self.action_net(latent_pi)
-        action = logits.reshape((-1, *self.action_space.shape))
-        action_probs = F.softmax(action, dim=-1)
+        obs_for_mask = obs
+        input_obs = self.standardize_queues(self._maybe_time_feature_crop(obs))
 
+        logits = self._policy_logits(input_obs)
+        action_probs = self._masked_action_probs(obs_for_mask, logits)
 
-        # print(f'action_probs: {action_probs}, network: {self.network}')
-        action_probs = action_probs * self.network
-        #print(f'action_probs-1: {action_probs}')
-        action_probs = torch.minimum(action_probs, obs.unsqueeze(1).repeat(1, self.s, 1))
-        zero_mask = torch.all(action_probs == 0, dim=2).reshape(-1, self.s, 1).repeat(1, 1, self.q)
-        action_probs = action_probs + zero_mask * self.network
-        action_probs = action_probs / torch.sum(action_probs, dim=-1).reshape(-1, self.s, 1)
-
-
-        # randomize policy or not
-        if self.randomize:
-            action = one_hot_sample.OneHotCategorical(probs = action_probs).sample()
+        if self.randomize and not deterministic:
+            action = OneHotCategorical(probs=action_probs).sample()
         else:
             action_indices = torch.argmax(action_probs, dim=-1)
-            action = F.one_hot(action_indices, num_classes=action_probs.shape[-1])
+            action = F.one_hot(action_indices, num_classes=self.q).float()
 
         return action, action_probs
 
-
-
+    # ====== 与原 SB3 风格一致的 API ======
+    @torch.no_grad()
     def predict(
         self,
-        observation: Union[np.ndarray, Dict[str, np.ndarray]],
+        observation: Union[np.ndarray, Dict[str, np.ndarray], Tensor],
         state: Optional[Tuple[np.ndarray, ...]] = None,
         episode_start: Optional[np.ndarray] = None,
         deterministic: bool = False,
-    ) -> Tuple[np.ndarray, Optional[Tuple[np.ndarray, ...]]]:
+    ) -> Tuple[Tensor, Tensor]:
         """
-        Get the policy action from an observation (and optional hidden state).
-        Includes sugar-coating to handle different observations (e.g. normalizing images).
-
-        :param observation: the input observation
-        :param state: The last hidden states (can be None, used in recurrent policies)
-        :param episode_start: The last masks (can be None, used in recurrent policies)
-            this correspond to beginning of episodes,
-            where the hidden states of the RNN must be reset.
-        :param deterministic: Whether or not to return deterministic actions.
-        :return: the model's action and the next hidden state
-            (used in recurrent policies)
+        返回:
+          - action(one-hot): (B, s, q)
+          - action_probs: (B, s, q)
         """
-        # Switch to eval mode (this affects batch norm / dropout)
-        self.set_training_mode(False)
-
-        # Check for common mistake that the user does not mix Gym/VecEnv API
-        # Tuple obs are not supported by SB3, so we can safely do that check
-        if isinstance(observation, tuple) and len(observation) == 2 and isinstance(observation[1], dict):
-            raise ValueError(
-                "You have passed a tuple to the predict() function instead of a Numpy array or a Dict. "
-                "You are probably mixing Gym API with SB3 VecEnv API: `obs, info = env.reset()` (Gym) "
-                "vs `obs = vec_env.reset()` (SB3 VecEnv). "
-                "See related issue https://github.com/DLR-RM/stable-baselines3/issues/1694 "
-                "and documentation for more information: https://stable-baselines3.readthedocs.io/en/master/guide/vec_envs.html#vecenv-api-vs-gym-api"
-            )
-
-        obs_tensor, vectorized_env = self.obs_to_tensor(observation)
-        obs_tensor = obs_tensor.view(-1, self.q)
-        with torch.no_grad():
-            action, action_probs = self.get_prob_act(obs_tensor, deterministic)
-
-        return action, action_probs  # type: ignore[return-value]
-
-    def evaluate_actions(self, obs: torch.Tensor, actions: torch.Tensor) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
-        # Preprocess the observation if needed
-        obs = obs.view(-1, self.q)
-        input_obs = self.standardize_queues(obs)
-        features = self.extract_features(input_obs)
-        if self.share_features_extractor:
-            latent_pi, latent_vf = self.mlp_extractor(features)
+        if isinstance(observation, dict):
+            # 若外部传 dict，请自行在上层转换；这里简单拼接/选择不支持
+            raise ValueError("predict() expects a tensor/ndarray observation of shape (B, q).")
+        if isinstance(observation, np.ndarray):
+            obs_tensor = torch.from_numpy(observation).to(next(self.parameters()).device).float()
         else:
-            pi_features, vf_features = features
-            latent_pi = self.mlp_extractor.forward_actor(pi_features)
-            latent_vf = self.mlp_extractor.forward_critic(vf_features)
+            obs_tensor = observation.to(next(self.parameters()).device).float()
 
-        logits = self.action_net(latent_pi)
-        action = logits.reshape((-1, *self.action_space.shape))
+        action, action_probs = self.get_prob_act(obs_tensor, deterministic)
+        return action, action_probs
 
+    def evaluate_actions(self, obs: Tensor, actions: Tensor) -> Tuple[Tensor, Optional[Tensor]]:
+        """
+        obs: (B, q)
+        actions: (B, s, q) one-hot
+        return:
+          - log_prob: (B,)
+          - entropy: None（保持兼容）
+        """
+        obs = obs.view(-1, self.q)
+        obs_for_mask = obs
+        input_obs = self.standardize_queues(self._maybe_time_feature_crop(obs))
 
-        if self.time_f:
-            obs = obs[:, :-1]
+        logits = self._policy_logits(input_obs)
+        action_probs = self._masked_action_probs(obs_for_mask, logits)
 
-
-        action_probs = F.softmax(action, dim=-1)
-        
-        action_probs = action_probs * self.network
-        action_probs = torch.minimum(action_probs, obs.unsqueeze(1).repeat(1, self.s, 1).detach())
-        zero_mask = torch.all(action_probs == 0, dim=2).reshape(-1, self.s, 1).repeat(1, 1, self.q)
-        action_probs = action_probs + zero_mask * self.network
-        action_probs = action_probs / torch.sum(action_probs, dim=-1).reshape(-1, self.s, 1)
-
-        actions = actions.reshape((-1, *self.action_space.shape))
-        
-        # Compute log probabilities of the provided actions
-
-        selected_probs = actions * action_probs
-        selected_probs_sum = selected_probs.sum(dim=-1) 
-        log_prob = torch.log(selected_probs_sum)
-        log_prob = log_prob.sum(dim=1)
-
+        actions = actions.view(-1, self.s, self.q).float()
+        selected_probs_sum = (actions * action_probs).sum(dim=-1).clamp_min(1e-8)  # (B, s)
+        log_prob = torch.log(selected_probs_sum).sum(dim=1)                          # (B,)
         entropy = None
+        return log_prob, entropy
 
-        return log_prob, entropy  
-    
-    def evaluate_values(self, obs: torch.Tensor) -> torch.Tensor:
+    def evaluate_values(self, obs: Tensor) -> Tensor:
         obs = obs.view(-1, self.q)
-        input_obs = self.standardize_queues(obs)
-        features = super().extract_features(input_obs, self.vf_features_extractor)
-        latent_vf = self.mlp_extractor.forward_critic(features)
-        values = self.value_net(latent_vf)
+        input_obs = self.standardize_queues(self._maybe_time_feature_crop(obs))
+        values = self.value_mlp(input_obs)
         return values
-    
-    def AMP(self, obs, action_repeat):
-        '''
-        Generates an approximating martingale process of a function f 
-        from a batch of states, which follow a Markov Chain under the policy.
 
-        Args:
-            f: (lambda) a function mapping queue lengths (B,q) to (B,1) rewards/values
-            x: (tensor (B,q)) a batch of queue length states
-            policy: (lambda) policy mapping queue lengths (B,q) to (B,s,q) probabilities
-            mu: (tensor (batch,s,q)) input dq.mu. note batch size may be different from B.
-            D: (tensor (2q, q)) input dq.queue_event_options
-    
-        Returns:
-            tensor (B,1): a batch of values
-        '''
-
-        # Batch size and num servers
-        #print("AMP")
-        #print(f'obs: {obs}')
-        x = self.standardize_queues(obs)
-        #print(f'x: {x}')
-        B = x.size()[0]
-        #print(f'B: {B}')
-        #print(f'D: {self.D}, shape: {self.D.shape}')
-        s = self.mu.size()[1]
-        
-        # Draw random actions from the policy
-        # action: (A*B,s,q)
-        # A = 10, B = 5, s = 2, q = 3
-        features = self.extract_features(x)
-        if self.share_features_extractor:
-            latent_pi, latent_vf = self.mlp_extractor(features)
-        else:
-            pi_features, vf_features = features
-            latent_pi = self.mlp_extractor.forward_actor(pi_features)
-            latent_vf = self.mlp_extractor.forward_critic(vf_features)
-        logits = self.action_net(latent_pi)
-        action = logits.reshape((-1, *self.action_space.shape))
-        action_probs = F.softmax(action, dim=-1)
-
-        action_probs = action_probs * self.network
-
-        action_probs = torch.minimum(action_probs, obs.unsqueeze(1).repeat(1, self.s, 1))
-        zero_mask = torch.all(action_probs == 0, dim=2).reshape(-1, self.s, 1).repeat(1, 1, self.q)
-        action_probs = action_probs + zero_mask * self.network
-        action_probs = action_probs / torch.sum(action_probs, dim=-1).reshape(-1, self.s, 1)
-
-        pr = action_probs.repeat_interleave(action_repeat, 0)
-        pr_sample = one_hot_sample.OneHotCategorical(probs = pr)
-        action = pr_sample.sample()
-
-        #print(f'action: {action}, shape: {action.shape}')
-        #print(f'mu:{self.mu[0].unsqueeze(0).repeat(B * action_repeat, 1, 1)}, shape: {self.mu[0].unsqueeze(0).repeat(B * action_repeat, 1, 1).shape}')
-
-        # Multiply with mu
-        # pmu: (A*B,q)
-        # pmu = 50, 3
-        #print(f'mu[0]', self.mu[0])
-        pmu = action * self.mu[0].unsqueeze(0).repeat(B * action_repeat, 1, 1)
-
-        # pmu_flat: (A*B,q)
-        # pmu_flat = 50, 3
-        pmu_flat = torch.sum(pmu, dim = 1)
-
-        # Concatenate with arrival rates
-        # Get probabilities by normalizing the rates
-        # prob_transitions: (A*B,2q)
-        # prob_transitions = 50, 6
-        prob_transitions = torch.hstack((self.alpha.unsqueeze(0).repeat(B * action_repeat, 1), pmu_flat))
-        prob_transitions /= prob_transitions.sum(dim = -1, keepdims = True)
-        
-        # Split by A, and then average
-        # This will get transition probabilities, averaged over random actions: (1/A)\sum_i P(s'|s,a_i)
-        # This is a monte carlo approximation of the true probabilities P(s'|s,a)
-        # prob_transitions: (B*2q,1)
-        # prob_transitions = 30, 1
-        prob_transitions = torch.split(prob_transitions, action_repeat)
-        prob_transitions = torch.mean(torch.stack(prob_transitions, dim = 0), dim = 1)
-        prob_transitions = torch.cat(tuple(prob_transitions))
-        #print(f'prob_transitions AMP: {prob_transitions}')
-
-        # Get set of transition states by adding D, which is dq.queue_event_options
-        # Px: (B*2q,q)
-        # px = 30, 3
-        Px = obs.unsqueeze(1) + self.D.unsqueeze(0).repeat(B,1,1)
-        Px = torch.cat(tuple(Px))
-        Px = torch.nn.ReLU()(Px)
-        # Px = self.standardize_queues(Px)
-
-        # Evaluate
-        # Pfx: B x 1
-        Pfx = torch.sum(torch.stack(torch.chunk(prob_transitions.unsqueeze(1) * self.predict_values(Px), B)), 1)
-
-        return Pfx
-    
-    def predict_next_states(self, obs: torch.Tensor, action_repeat) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-            
+    # ====== 仅供 AMP / 规划等用 ======
+    def predict_values(self, obs: Tensor) -> Tensor:
         obs = obs.view(-1, self.q)
-        AMP_values = self.AMP(obs, action_repeat)
-
-        return AMP_values
-    
-    def predict_values(self, obs: PyTorchObs) -> torch.Tensor:
-        obs = obs.view(-1, self.q)
-        input_obs = self.standardize_queues(obs)
-        features = super().extract_features(input_obs, self.vf_features_extractor)
-        latent_vf = self.mlp_extractor.forward_critic(features)
-        values = self.value_net(latent_vf)
-        if self.rescale_v: 
+        input_obs = self.standardize_queues(self._maybe_time_feature_crop(obs))
+        values = self.value_mlp(input_obs)
+        if self.rescale_v:
             values = self.rescale_values(values)
         return values
 
-          
-    
+    @torch.no_grad()
+    def AMP(self, obs: Tensor, action_repeat: int) -> Tensor:
+        """
+        近似鞅过程评估（与原实现对齐）
+        obs: (B, q) 非负队列长度
+        return: (B, 1)
+        """
+        x = self.standardize_queues(obs)
+        B = x.size(0)
 
+        # 计算策略概率
+        logits = self._policy_logits(x)
+        action_probs = self._masked_action_probs(obs, logits)
+
+        # 重复采样
+        pr = action_probs.repeat_interleave(action_repeat, dim=0)  # (A*B, s, q)
+        action = OneHotCategorical(probs=pr).sample()              # (A*B, s, q)
+
+        # 乘以 mu
+        pmu = action * self.mu[0].unsqueeze(0).repeat(B * action_repeat, 1, 1)  # (A*B, s, q)
+        pmu_flat = pmu.sum(dim=1)                                               # (A*B, q)
+
+        # 拼 arrival rates 并归一化
+        prob_transitions = torch.hstack((self.alpha.unsqueeze(0).repeat(B * action_repeat, 1), pmu_flat))  # (A*B, 2q)
+        prob_transitions = prob_transitions / prob_transitions.sum(dim=-1, keepdim=True).clamp_min(1e-12)
+
+        # 对 A 次采样求均值（蒙特卡洛近似）
+        prob_transitions = torch.stack(torch.chunk(prob_transitions, action_repeat, dim=0), dim=0).mean(dim=0)  # (B, 2q)
+        prob_transitions = prob_transitions.view(B * (2 * self.q), 1)  # (B*2q, 1)
+
+        # 构造转移后的状态集合
+        Px = obs.unsqueeze(1) + self.D.unsqueeze(0).repeat(B, 1, 1)  # (B, 2q, q)
+        Px = torch.relu(Px).view(B * (2 * self.q), self.q)           # (B*2q, q)
+
+        # 评估期望值
+        Pfx = (prob_transitions * self.predict_values(Px)).view(B, 2 * self.q, 1).sum(dim=1)  # (B, 1)
+        return Pfx
+
+    @torch.no_grad()
+    def predict_next_states(self, obs: Tensor, action_repeat: int) -> Tensor:
+        obs = obs.view(-1, self.q)
+        AMP_values = self.AMP(obs, action_repeat)
+        return AMP_values
