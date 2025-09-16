@@ -11,6 +11,7 @@ from torchrl.data import (
     CompositeSpec,
     UnboundedContinuousTensorSpec,
     DiscreteTensorSpec,
+    Categorical
 )
 from torchrl.envs.common import EnvBase
 
@@ -93,7 +94,7 @@ def allocator(action: torch.Tensor, mu: torch.Tensor, queue_service_times: List[
 # -----------------------------
 # TorchRL-only Env
 # -----------------------------
-class DiffDiscreteEventSystemTorchRL(EnvBase):
+class DiffDiscreteEventSystemTorch(EnvBase):
     """
     TorchRL-native environment converted from your Gym version.
 
@@ -111,8 +112,8 @@ class DiffDiscreteEventSystemTorchRL(EnvBase):
         network: torch.Tensor,    # [s, q]
         mu: torch.Tensor,         # [s, q]
         h: torch.Tensor,          # [q]
-        draw_service: Callable[["DiffDiscreteEventSystemTorchRL", torch.Tensor], torch.Tensor],
-        draw_inter_arrivals: Callable[["DiffDiscreteEventSystemTorchRL", torch.Tensor], torch.Tensor],
+        draw_service: Callable[["DiffDiscreteEventSystemTorch", torch.Tensor], torch.Tensor],
+        draw_inter_arrivals: Callable[["DiffDiscreteEventSystemTorch", torch.Tensor], torch.Tensor],
         *,
         queue_event_options: Optional[torch.Tensor] = None,  # [2q, q] with +I and -I by default
         temp: float = 1.0,
@@ -168,7 +169,7 @@ class DiffDiscreteEventSystemTorchRL(EnvBase):
         )
 
         self.reward_spec = UnboundedContinuousTensorSpec(shape=torch.Size([1]), device=self.device)
-        self.done_spec = DiscreteTensorSpec(2, shape=torch.Size([1]), dtype=torch.bool, device=self.device)
+        self.done_spec = Categorical(2, shape=torch.Size([1]), dtype=torch.bool, device=self.device)
 
     # ------------------ helpers ------------------
     def draw_service(self, time: torch.Tensor) -> torch.Tensor:
@@ -324,15 +325,15 @@ if __name__ == "__main__":
     h = torch.ones(q)
 
     # Simple torch-native sampling fns
-    def draw_service(env: DiffDiscreteEventSystemTorchRL, time: torch.Tensor) -> torch.Tensor:
+    def draw_service(env: DiffDiscreteEventSystemTorch, time: torch.Tensor) -> torch.Tensor:
         return torch.distributions.Exponential(rate=torch.ones(1, env.q, device=env.device)).sample()
 
-    def draw_inter_arrivals(env: DiffDiscreteEventSystemTorchRL, time: torch.Tensor) -> torch.Tensor:
+    def draw_inter_arrivals(env: DiffDiscreteEventSystemTorch, time: torch.Tensor) -> torch.Tensor:
         # constant rate 1.0 (customize as needed)
         exps = torch.distributions.Exponential(rate=torch.ones(1, env.q, device=env.device)).sample()
         return exps
 
-    env = DiffDiscreteEventSystemTorchRL(
+    env = DiffDiscreteEventSystemTorch(
         network=network,
         mu=mu,
         h=h,

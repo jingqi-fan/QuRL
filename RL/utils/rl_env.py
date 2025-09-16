@@ -1,231 +1,184 @@
-import sys
+# rl_env.py  — TorchRL-only wrapper that inherits DiffDiscreteEventSystemTorch
+
 import os
-current_dir = os.path.dirname(os.path.abspath(__file__))
-project_root = os.path.dirname(os.path.dirname(current_dir))
-sys.path.append(project_root)
-print(project_root)
 import numpy as np
 import torch
-from gymnasium import spaces
-from main.env import DiffDiscreteEventSystem
-from typing import NamedTuple
+from typing import Optional, Dict, Any
+
+# 路径注入（和你原来一致）
+current_dir = os.path.dirname(os.path.abspath(__file__))
+project_root = os.path.dirname(os.path.dirname(current_dir))
+import sys
+sys.path.append(project_root)
+
+from main.env import DiffDiscreteEventSystemTorch
 
 
-class Obs(NamedTuple):
-    queues: torch.Tensor
-    time: torch.Tensor
-
-class EnvState(NamedTuple):
-    queues: torch.Tensor
-    time: torch.Tensor
-    service_times: torch.Tensor
-    arrival_times: torch.Tensor
-
-class RL_Wrapper_P_DiffDiscreteEventSystem(DiffDiscreteEventSystem):
+class RLQueueEnv(DiffDiscreteEventSystemTorch):
+    """Pure TorchRL env that *inherits* DiffDiscreteEventSystemTorch.
+    提供 from_config 工厂方法，把 yaml/dict 配置转成 GPU 上可用的 env。
     """
-    This subclass of GymDiffDiscreteEventSystem is compatible with Stable Baselines 3.
-    """
-    def __init__(self, 
-                 network:torch.Tensor, 
-                 mu:torch.Tensor, 
-                 h:torch.Tensor,
-                 draw_service,
-                 draw_inter_arrivals,
-                 init_time,
-                 queue_event_options = None,
-                 straight_through_min = False,
-                 batch:int = 1, 
-                 temp:float = 1,
-                 seed:int = 3003,
-                 device:torch.device = torch.device('cpu'), 
-                 f_hook:bool = False, 
-                 f_verbose:bool = False,
-                 time_f = False,
-                 reward_scale = 1.0,
-                 policy_name = 'WC',
-                 action_map = None,
-                 ):
-        
-        self.time_f = time_f
-        self.policy_name = policy_name
-        self.action_map = action_map
-        self.seed = seed
-        
-        super().__init__(network = network,
-                            mu = mu,
-                            h = h,
-                            draw_service= draw_service,
-                            draw_inter_arrivals = draw_inter_arrivals,
-                            init_time = init_time,
-                            queue_event_options = queue_event_options,
-                            straight_through_min = straight_through_min,
-                            batch = batch,
-                            temp = temp,
-                            seed = seed,
-                            device = device,
-                            f_hook = f_hook,
-                            f_verbose = f_verbose,
-                            use_sb = True
-                            )
 
+    def __init__(
+        self,
+        *,
+        network: torch.Tensor,            # [s, q]
+        mu: torch.Tensor,                 # [s, q]
+        h: torch.Tensor,                  # [q]
+        draw_service,                     # (env, time) -> [1, q] torch
+        draw_inter_arrivals,              # (env, time) -> [1, q] torch
+        queue_event_options: Optional[torch.Tensor] = None,  # [2q, q]
+        temp: float = 1.0,
+        device: str | torch.device = "cuda",
+        seed: int = 3003,
+    ):
+        super().__init__(
+            network=network,
+            mu=mu,
+            h=h,
+            draw_service=draw_service,
+            draw_inter_arrivals=draw_inter_arrivals,
+            queue_event_options=queue_event_options,
+            temp=temp,
+            device=device,
+            seed=seed,
+        )
 
-        process_id = os.getpid()
-        parent_process_id = os.getppid()
-        print(f"Environment initialized in process: {process_id}, parent process: {parent_process_id}")
+    # -------- convenience: build from config dict --------
+    @classmethod
+    def from_config(
+        cls,
+        env_config: Dict[str, Any],
+        *,
+        temp: float = 1.0,
+        seed: int = 3003,
+        device: str | torch.device = "cuda",
+    ) -> "RLQueueEnv":
+        """把你原来的 env_config（yaml -> dict）转换成 TorchRL 环境。
+        - 全部 tensor 放到 device（默认 cuda）
+        - 采样函数 (service / inter-arrivals) 用 torch.distributions 实现
+        """
+        dev = torch.device(device)
 
-        if self.policy_name == 'WC' or self.policy_name == 'vanilla' or self.policy_name == 'pathwise':
-            self.action_space = spaces.Box(low=0, high=1, shape=(self.s, self.q), dtype=np.float32)
-        elif self.policy_name == 'discrete':
-            self.action_space = spaces.Discrete(len(self.action_map))
-            # print all actions in action map:
-            # self.action_space = spaces.MultiDiscrete([self.q] * self.s)
-            # action_space = spaces.Box(low=0, high=1, shape=(self.s, self.q), dtype=np.float32)
-            #self.action_space = spaces.Box(low=0, high=1, shape=(self.s, self.q), dtype=np.float32)
+        name = env_config.get("name")
+        env_type = env_config.get("env_type", name)
 
-        if time_f:
-            self.observation_space = spaces.Box(
-                low=0, 
-                high=np.inf, 
-                shape=(self.q + 1,),  # Add 1 for the time
-                dtype=np.float32
-            )
-        
-        else:
-            self.observation_space = spaces.Box(
-                low=0, 
-                high=np.inf, 
-                shape=(self.q,),  
-                dtype=np.float32
-            )
+        # ---- load network ----
+        if env_config.get("network") is None:
+            network_path = os.path.join(project_root, "configs", "env_data", env_type, f"{env_type}_network.npy")
+            env_config["network"] = np.load(network_path)
+        network = torch.as_tensor(env_config["network"], dtype=torch.float32, device=dev)
 
-        self.obs = None
-        self.reward_scale = reward_scale
+        # ---- load mu ----
+        if env_config.get("mu") is None:
+            mu_path = os.path.join(project_root, "configs", "env_data", env_type, f"{env_type}_mu.npy")
+            env_config["mu"] = np.load(mu_path)
+        mu = torch.as_tensor(env_config["mu"], dtype=torch.float32, device=dev)
 
-    def reset(self, init_queues=None, time=None, seed = None, options:dict = None):
-        obs, even_state = super().reset(init_queues, time, seed = self.seed, options = None)
-        queues = obs.queues
-        return queues.cpu().numpy(), {}
-    
-    def reset_env_seed(self):
-        seed = self.seed
-        # print(f"seed: {seed}")  
-        if seed is not None:
-            self.state = np.random.RandomState(seed)
+        # ---- h (queue cost weights) ----
+        h = torch.as_tensor(env_config["h"], dtype=torch.float32, device=dev)
 
+        s, q = network.shape
 
-def load_rl_p_env(env_config, temp, batch, seed, policy_name, device):
-
-    name = env_config['name']
-
-    if 'env_type' in env_config:
-        env_type = env_config['env_type']
-    else:
-        env_type = name
-
-    if env_config['network'] is None:
-        network_path = os.path.join(project_root, 'configs', 'env_data', env_type, f'{env_type}_network.npy')
-        env_config['network'] = np.load(network_path)
-
-    env_config['network'] = torch.tensor(env_config['network']).float()
-
-
-    if env_config['mu'] is None:
-        mu_path = os.path.join(project_root, 'configs', 'env_data', env_type, f'{env_type}_mu.npy')
-        env_config['mu'] = np.load(mu_path)
-    env_config['mu'] = torch.tensor(env_config['mu']).float()
-
-    orig_s, orig_q = env_config['network'].size()
-
-
-    network = env_config['network'].repeat_interleave(1, dim = 0)
-    mu = env_config['mu'].repeat_interleave(1, dim = 0)
-    # if 'server_pool_size' in env_config.keys():
-    #     env_config['server_pool_size'] = torch.tensor(env_config['server_pool_size']).to(model_config['env']['device'])
-    # else:
-    #     env_config['server_pool_size'] = torch.ones(orig_s).to(model_config['env']['device'])
-
-    queue_event_options = env_config['queue_event_options']
-    if queue_event_options is not None:
-        if queue_event_options == 'custom':
-            queue_event_options_path = os.path.join(project_root, 'configs', 'env_data', env_type, f'{env_type}_delta.npy')
-            queue_event_options = torch.tensor(np.load(queue_event_options_path))
-        else:
-            queue_event_options = torch.tensor(queue_event_options)
-
-
-
-    lam_type = env_config['lam_type']
-    lam_params = env_config['lam_params']
-    h = torch.tensor(env_config['h'])
-
-    if lam_params['val'] is None:
-        lam_r_path = os.path.join(project_root, 'configs', 'env_data', env_type, f'{env_type}_lam.npy')
-        lam_r = np.load(lam_r_path)
-    else:
-        lam_r = lam_params['val']
-    def lam(t):
-            if lam_type == 'constant':
-                lam = lam_r
-            elif lam_type == 'step':
-                is_surge = 1*(t.data.cpu().numpy() <= lam_params['t_step'])
-                lam = is_surge * np.array(lam_params['val1']) + (1 - is_surge) * np.array(lam_params['val2'])
+        # ---- queue_event_options ----
+        queue_event_options = env_config.get("queue_event_options")
+        if queue_event_options is not None:
+            if queue_event_options == "custom":
+                queue_event_options_path = os.path.join(project_root, "configs", "env_data", env_type, f"{env_type}_delta.npy")
+                queue_event_options = torch.as_tensor(np.load(queue_event_options_path), dtype=torch.float32, device=dev)
             else:
-                return 'Nonvalid arrival rate'
-            
-            return lam
-        
+                queue_event_options = torch.as_tensor(queue_event_options, dtype=torch.float32, device=dev)
 
-    if env_config['queue_event_options'] == 'custom':
-        queue_event_options_path = os.path.join(project_root, 'configs', 'env_data', env_type, f'{env_type}_delta.npy')     
-        env_config['queue_event_options'] = torch.tensor(np.load(queue_event_options_path))
+        # ---- arrival rate (lambda) config ----
+        lam_type = env_config.get("lam_type", "constant")
+        lam_params = env_config.get("lam_params", {"val": None})
 
+        if lam_params.get("val") is None:
+            lam_r_path = os.path.join(project_root, "configs", "env_data", env_type, f"{env_type}_lam.npy")
+            lam_r_np = np.load(lam_r_path)
+        else:
+            lam_r_np = np.asarray(lam_params["val"])
+        lam_r = torch.as_tensor(lam_r_np, dtype=torch.float32, device=dev)  # [q]
 
-    def draw_inter_arrivals(self, time):
+        # torch 版 λ(t)
+        def lam_rate_at(t: torch.Tensor) -> torch.Tensor:
+            # t: [1,1]
+            if lam_type == "constant":
+                return lam_r
+            elif lam_type == "step":
+                val1 = torch.as_tensor(lam_params["val1"], dtype=torch.float32, device=dev)
+                val2 = torch.as_tensor(lam_params["val2"], dtype=torch.float32, device=dev)
+                is_surge = (t.squeeze() <= float(lam_params["t_step"]))
+                return val1 if is_surge else val2
+            else:
+                raise ValueError(f"Unsupported lam_type: {lam_type}")
 
-        def inter_arrival_dists(state, batch, t):
-            exps = state.exponential(1, (batch, orig_q))
-            lam_rate = lam(t)
-            # print(f'exps {exps}')
-            # print(f'lam_rate {lam_rate}')
-            return exps / lam_rate
+        # ---- torch-native sampling functions ----
+        def draw_inter_arrivals(env: DiffDiscreteEventSystemTorch, time: torch.Tensor) -> torch.Tensor:
+            rate = lam_rate_at(time).unsqueeze(0)  # [1, q]
+            return torch.distributions.Exponential(rate=rate).sample()
 
-        interarrivals = torch.tensor(inter_arrival_dists(self.state, self.batch, time)).to(self.device)
-        return interarrivals
-    
-    def draw_service(self, time):
-        def service_dists(state, batch, t):
-            return state.exponential(1, (batch, orig_q))
-        service = torch.tensor(service_dists(self.state, self.batch, time)).to(self.device)
-        return service
+        def draw_service(env: DiffDiscreteEventSystemTorch, time: torch.Tensor) -> torch.Tensor:
+            rate = torch.ones(1, q, device=dev)
+            return torch.distributions.Exponential(rate=rate).sample()
 
-    # def draw_service(self, time):
-    #     def service_dists(state, batch, t):
-    #         return state.exponential(1, (batch, orig_q))
-    #     service = torch.tensor(service_dists(self.state, self.batch, time)).to(self.device)
-    #     return service
+        # ---- build env (on device) ----
+        return cls(
+            network=network,
+            mu=mu,
+            h=h,
+            draw_service=draw_service,
+            draw_inter_arrivals=draw_inter_arrivals,
+            queue_event_options=queue_event_options,
+            temp=temp,
+            device=dev,
+            seed=seed,
+        )
 
-    # rho = 1.0
-    # exp_arrival_1 = lambda state, t: state.exponential(1/(2.4*rho)) if t <= 100 else state.exponential(1/(0.4*rho))
-    # exp_arrival_2 = lambda state, t: state.exponential(1/(0.6*rho)) if t <= 100 else state.exponential(1/(0.8*rho))
-    # exp_arrival_3 = lambda state, t: state.exponential(1/(0.8*rho))
-    # exp_arrival_4 = lambda state, t: state.exponential(1/(1.6*rho)) if t <= 100 else state.exponential(1/(0.8*rho))
-    # exp_arrival_5 = lambda state, t: state.exponential(1/(0.6*rho))
+def load_rl_p_env(
+    env_config: Dict[str, Any],
+    temp: float,
+    batch: int,           # 兼容旧签名：此参数此处不再使用
+    seed: int,
+    policy_name: str,     # 兼容旧签名：此参数此处不再使用
+    device: str | torch.device,
+):
+    """
+    兼容旧接口的“薄封装”：
+    - 忽略 old-SB3 流程里用到的 batch / policy_name（TorchRL 里建议用 collector/ParallelEnv 管理并行）
+    - 直接调用纯 TorchRL 的构造器，返回一个 GPU 就绪的环境实例
+    """
+    dev = torch.device(device)
+    env = RLQueueEnv.from_config(env_config, temp=temp, seed=seed, device=dev)
+    return env
 
-    # def draw_inter_arrivals(self, time):
+# -----------------------------
+# Minimal example
+# -----------------------------
+if __name__ == "__main__":
+    device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    #     interarrivals = torch.tensor([[exp_arrival_1(self.state, time), exp_arrival_2(self.state, time), exp_arrival_3(self.state, time), exp_arrival_4(self.state, time), exp_arrival_5(self.state, time)] for _ in range(self.batch)]).to(self.device)
-        
-    #     return interarrivals
+    # 这里用一个最小配置；实际使用时从你的 yaml 读进来
+    env_config = {
+        "name": "demo",
+        "network": np.ones((3, 4), dtype=np.float32),
+        "mu": (np.random.rand(3, 4).astype(np.float32) + 0.5),
+        "h": np.ones(4, dtype=np.float32),
+        "lam_type": "constant",
+        "lam_params": {"val": [1.0, 1.0, 1.0, 1.0]},
+        "queue_event_options": None,
+    }
 
-    dq = RL_Wrapper_P_DiffDiscreteEventSystem(network, mu, h, 
-                                       draw_service= draw_service, draw_inter_arrivals = draw_inter_arrivals, init_time = 0, 
-                                    queue_event_options= queue_event_options,
-                                    batch = batch, 
-                                    temp = temp, seed = seed,
-                                    time_f = False,
-                                    reward_scale = 1.0,
-                                    policy_name= policy_name,
-                                    action_map = None,
-                                    device = torch.device(device))
+    env = RLQueueEnv.from_config(env_config, device=device, seed=3003, temp=1.0)
 
-    return dq
+    td = env.reset()
+    # print("reset:", td.get("queues"), td.get("time"))
+
+    from tensordict import TensorDict
+    for t in range(5):
+        action = env.action_spec.rand()  # TorchRL 原生动作采样
+        td = env.step(TensorDict({"action": action}, batch_size=[]))
+        # print(
+        #     f"t={t+1:02d} | time={float(td.get('time').item()):.4f} | "
+        #     f"reward={float(td.get('reward').item()):.4f} | queues={td.get('queues').tolist()}"
+        # )
