@@ -152,34 +152,77 @@ def main():
 
     base_policy = BasePolicyClass(**policy_kwargs).to(device)
 
+    # # === 用 TensorDictModule 适配成 TorchRL 可用的 actor / value ===
+    # # 注意：Env 的 observation keys 是 {"queues","time"}，我们只用 queues
+    # class PolicyTDAdapter(nn.Module):
+    #     def __init__(self, pol):
+    #         super().__init__()
+    #         self.pol = pol
+    #     def forward(self, queues: torch.Tensor):
+    #         # 返回 action(one-hot, B,s,q) & sample_log_prob(B,)
+    #         action, _, log_prob = self.pol.forward(queues, deterministic=False)
+    #         return action, log_prob
+    #
+    # actor_td = TensorDictModule(
+    #     module=PolicyTDAdapter(base_policy),
+    #     in_keys=["queues"],                      # 只喂 queues
+    #     out_keys=["action", "sample_log_prob"],  # ClipPPOLoss 期望的 key
+    # ).to(device)
+    #
+    # class ValueHead(nn.Module):
+    #     def __init__(self, pol):
+    #         super().__init__()
+    #         self.pol = pol
+    #     def forward(self, queues: torch.Tensor):
+    #         v = self.pol.predict_values(queues)
+    #         return v
+    #
+    # value_td = TensorDictModule(
+    #     module=ValueHead(base_policy),
+    #     in_keys=["queues"],
+    #     out_keys=["state_value"],
+    # ).to(device)
+
     # === 用 TensorDictModule 适配成 TorchRL 可用的 actor / value ===
-    # 注意：Env 的 observation keys 是 {"queues","time"}，我们只用 queues
+    # 是否使用 time 特征（跟你的 WC_Policy 配置一致）
+    use_time = getattr(base_policy, "time_f", False) or getattr(base_policy, "use_time", False)
+    actor_in_keys = ["queues", "time"] if use_time else ["queues"]
+    value_in_keys = ["queues", "time"] if use_time else ["queues"]
+
+    # --- 策略适配器：从 Tensordict 取出 queues(/time) -> 组 obs -> 调用 base_policy.forward ---
     class PolicyTDAdapter(nn.Module):
-        def __init__(self, pol):
+        def __init__(self, pol, use_time: bool):
             super().__init__()
             self.pol = pol
-        def forward(self, queues: torch.Tensor):
-            # 返回 action(one-hot, B,s,q) & sample_log_prob(B,)
-            action, _, log_prob = self.pol.forward(queues, deterministic=False)
+            self.use_time = use_time
+
+        def forward(self, queues: torch.Tensor, time: torch.Tensor = None):
+            obs = torch.cat([queues, time], dim=-1) if self.use_time and time is not None else queues
+            action, _, log_prob = self.pol.forward(obs, deterministic=False)
             return action, log_prob
 
     actor_td = TensorDictModule(
-        module=PolicyTDAdapter(base_policy),
-        in_keys=["queues"],                      # 只喂 queues
-        out_keys=["action", "sample_log_prob"],  # ClipPPOLoss 期望的 key
+        module=PolicyTDAdapter(base_policy, use_time),
+        in_keys=actor_in_keys,  # 需要 time 特征就把 'time' 也喂进来
+        out_keys=["action", "sample_log_prob"],  # PPO 期望的键
     ).to(device)
 
+    # --- 价值头适配器：只算 V，保持(*B,1) 形状 ---
     class ValueHead(nn.Module):
-        def __init__(self, pol):
+        def __init__(self, pol, use_time: bool):
             super().__init__()
             self.pol = pol
-        def forward(self, queues: torch.Tensor):
-            v = self.pol.predict_values(queues)
-            return v
+            self.use_time = use_time
+
+        def forward(self, queues: torch.Tensor, time: torch.Tensor = None):
+            obs = torch.cat([queues, time], dim=-1) if self.use_time and time is not None else queues
+            # 注意：WC_Policy.predict_values / value_only 里必须“保留前导 batch 维”，不要 flatten
+            v = self.pol.predict_values(obs)  # or: self.pol.value_only(obs) 如果你已实现 value_only
+            return v  # 形状应是 (*B, 1)
 
     value_td = TensorDictModule(
-        module=ValueHead(base_policy),
-        in_keys=["queues"],
+        module=ValueHead(base_policy, use_time),
+        in_keys=value_in_keys,
         out_keys=["state_value"],
     ).to(device)
 
