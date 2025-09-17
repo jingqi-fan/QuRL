@@ -153,13 +153,14 @@ class BatchedDiffDES(EnvBase):
         if tensordict is None:
             tensordict = TensorDict({}, [])
 
-        # 获取 batch 大小：优先 params，其次 queues/time
         if "params" in tensordict.keys():
             B = tensordict["params"].batch_size
-        else:
+        elif tensordict.batch_size != torch.Size([]):
             B = tensordict.batch_size
-        if len(B) == 0:
-            B = torch.Size([1])
+        else:
+            print(f'tensordict batch size is {tensordict.batch_size}, torch size is {torch.Size([])}')
+            raise ValueError("No batch size provided in reset. "
+                             "Please call reset(env.gen_params(batch_size=[B])) or pass queues/time with batch dims.")
 
         # 初始 queues/time
         queues = tensordict.get("queues", torch.zeros(B + (self.Q,), device=self.device)).float()
@@ -332,17 +333,6 @@ class BatchedDiffDES(EnvBase):
 
         done = torch.zeros_like(reward, dtype=torch.bool)
 
-        # out = TensorDict(
-        #     {
-        #         "queues": queues,
-        #         "time": time_now,
-        #         "params": TensorDict({"max_jobs": torch.full((queues.size(0),), self.J, dtype=torch.int64, device=self.device)}, queues.batch_size),
-        #         "reward": reward,
-        #         "done": done,
-        #     },
-        #     batch_size=queues.batch_size,
-        # )
-
         # 取 batch 维（这里是 B）
         B = queues.shape[0]  # int
         bs = torch.Size([B])  # TensorDict 需要 torch.Size
@@ -453,7 +443,7 @@ if __name__ == "__main__":
 
 
     def simple_rollout(env, steps=100):
-        _data = env.reset()
+        _data = env.reset(env.gen_params(batch_size=[BATCH]))
         B = _data.batch_size
         data = TensorDict({}, [*B, steps], device=env.device)
 
