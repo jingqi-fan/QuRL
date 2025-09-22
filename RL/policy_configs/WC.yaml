@@ -9,6 +9,7 @@ env:
   randomize: True
   time_f: False
   reward_scale: 1.0
+  batch: 3
 model:
   policy_name: "WC"
   scale: 10

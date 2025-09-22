@@ -4,7 +4,7 @@ from torchrl.data import Composite, Unbounded
 from torchrl.envs import EnvBase
 from torchrl.envs.utils import step_mdp
 
-from main.env import BatchedDiffDES
+from main.env_topk import BatchedDiffDES
 
 
 # 假设你已有 BatchedDiffDES（上一版可批处理的 TorchRL 环境）
@@ -30,6 +30,7 @@ class TRLContinuousEnv(BatchedDiffDES):
         temp: float = 1.0,
         device: str = "cpu",
         seed: int | None = None,
+        default_B: int = 1,
         verbose: bool = False,
         # wrapper 选项：
         reward_scale: float = 1.0,
@@ -45,6 +46,7 @@ class TRLContinuousEnv(BatchedDiffDES):
             temp=temp,
             device=device,
             seed=seed,
+            default_B=default_B,
             verbose=verbose,
         )
         self.reward_scale = float(reward_scale)
@@ -121,7 +123,7 @@ if __name__ == "__main__":
 
     # 手写 rollout（batch 自适应）
     def simple_rollout(env: EnvBase, steps=10):
-        _data = env.reset()                           # 确保在 env.to(device) 之后调用
+        _data = env.reset(env.gen_params(batch_size=[BATCH]))
         B = _data.batch_size
         traj = TensorDict({}, [*B, steps], device=env.device)
         for t in range(steps):

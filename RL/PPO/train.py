@@ -28,7 +28,7 @@ def train_ppo(config_file, env_config_file):
     env = load_trl_env(
         env_config,
         temp=config["env"]["env_temp"],
-        batch=1,
+        batch=config["env"]["batch"],
         seed=seed,
         device=device,
         reward_scale=config["env"]["reward_scale"],

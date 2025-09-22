@@ -8,7 +8,8 @@ env:
   train_seed: 3003
   randomize: True 
   time_f: False 
-  reward_scale: 1.0 
+  reward_scale: 1.0
+  batch: 3
 model: 
   policy_name: "vanilla"
   scale: 10
@@ -37,7 +38,7 @@ training:
   gamma: 0.998 
   target_kl: 0.03
   vf_coef: 1.0
-  batch_size: 64
+  batch_size: 3
   ppo_epochs: 6
   clip_range_vf: null 
   ent_coef: 0.0  

@@ -6,7 +6,7 @@ import torch
 from tensordict import TensorDict
 
 from RL.env.rl_env import TRLContinuousEnv
-from main.env import BatchedDiffDES
+from main.env_topk import BatchedDiffDES
 
 current_dir = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.dirname(os.path.dirname(current_dir))
@@ -117,6 +117,7 @@ def load_trl_env(env_config: dict,
         temp=temp,
         device=device,
         seed=seed,
+        default_B=batch,
         verbose=False,
         reward_scale=reward_scale,
         time_f=time_f,

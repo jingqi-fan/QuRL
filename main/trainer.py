@@ -1,7 +1,7 @@
 from tqdm import trange
 import torch.nn.functional as F
 import math
-from main.env import DiffDiscreteEventSystemTorch
+from main.env import BatchedDiffDES
 from datetime import datetime
 
 
@@ -27,10 +27,8 @@ class Trainer:
 
 
     def train_epoch(self):
-        print('1')
-        dq = DiffDiscreteEventSystemTorch(self.env_config['network'], self.env_config['mu'], self.env_config['h'], 
-                                    queue_event_options = self.env_config['queue_event_options'],
-                                    batch = 1, 
+        # print('1')
+        dq = BatchedDiffDES(self.env_config['network'], self.env_config['mu'], self.env_config['h'], queue_event_options = self.env_config['queue_event_options'], batch = 1,
                                     temp = self.model_config['env']['env_temp'], seed = self.model_config['env']['train_seed'],
                                     device = torch.device(self.model_config['env']['device']), draw_service = self.draw_service, draw_inter_arrivals = self.draw_inter_arrivals)
 
@@ -250,7 +248,7 @@ class Trainer:
         time_weight_queue_len_batch = []
         for dq_idx in range(bs):
 
-            dq = DiffDiscreteEventSystemTorch(self.env_config['network'], self.env_config['mu'], self.env_config['h'], 
+            dq = BatchedDiffDES(self.env_config['network'], self.env_config['mu'], self.env_config['h'],
                                         queue_event_options= self.env_config['queue_event_options'],
                                         batch = 1, 
                                         temp = self.model_config['env']['env_temp'], seed = seed + dq_idx,

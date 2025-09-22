@@ -131,13 +131,6 @@ def draw_inter_arrivals(self, time):
     interarrivals = torch.tensor(inter_arrival_dists(self.state, self.batch, time)).to(self.device)
     return interarrivals
 
-# def draw_inter_arrivals(self, time):
-#     def inter_arrival_dists(state, batch, t):
-#         # 例如从正态分布采样 inter-arrival
-#         arr = state.normal(loc=1.0, scale=0.2, size=(batch, orig_q))
-#         arr = np.clip(arr, 0.01, None)  # 保证正数
-#         return arr
-#     return torch.tensor(inter_arrival_dists(self.state, self.batch, time)).to(self.device)
 
 optimizer = None
 trainer = Trainer(model_config, env_config, policy, optimizer, experiment_name = experiment_name, draw_service = draw_service, draw_inter_arrivals = draw_inter_arrivals)
