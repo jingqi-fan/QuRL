@@ -2,7 +2,6 @@ import numpy as np
 import scipy.optimize as opt
 import scipy.sparse as sparse
 import torch
-from torch import nn
 import torch.nn.functional as F
 
 # preemptive policy

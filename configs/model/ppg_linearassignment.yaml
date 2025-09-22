@@ -18,7 +18,7 @@ param:
 opt:
   num_epochs: 100
   train_batch: 16
-  test_batch: 16
+  test_batch: 2
   lr: 0.0001
   betas: [0.8, 0.9]
   grad_clip_norm: 1.0

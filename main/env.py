@@ -48,7 +48,8 @@ class BatchedDiffDES(EnvBase):
 
         self.network = network.to(self.device).float()  # [S,Q]
         self.mu = mu.to(self.device).float()            # [S,Q]
-        self.h = h.to(self.device).float()              # [Q]
+        # self.h = h.to(self.device).float()
+        self.h = torch.tensor(h, dtype=torch.float32, device=self.device) # [Q]
         self.S, self.Q = self.network.shape
         self.J = int(max_jobs)
         self.default_B = default_B
