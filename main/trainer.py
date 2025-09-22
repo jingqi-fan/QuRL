@@ -1,14 +1,27 @@
+# trainer_vectorized.py
 from tqdm import trange
+import torch
 import torch.nn.functional as F
 import math
-from main.env import BatchedDiffDES
+from tensordict import TensorDict
 from datetime import datetime
 
+# 你自己的工具（保持不变）
+from utils.switchplot import create_plot_dir, create_loss_dir
+# 如果你用到了 rt.*（pad_pool / Sinkhorn / linear_assignment_batch），请确保导入：
+# import your_runtime_lib as rt
 
-from utils.switchplot import *
+from main.env import BatchedDiffDES
+import utils.routing as rt
 
 class Trainer:
-    def __init__(self, model_config, env_config, policy, optimizer, draw_service, draw_inter_arrivals, experiment_name):
+    """
+    向量化版 Trainer：单实例 + 批量并行（default_B = batch_size）
+    适配最新的 BatchedDiffDES（TorchRL EnvBase 版，step 返回 TensorDict，含 cost/event_time）。
+    """
+
+    def __init__(self, model_config, env_config, policy, optimizer,
+                 draw_service, draw_inter_arrivals, experiment_name):
         self.model_config = model_config
         self.env_config = env_config
         self.policy = policy
@@ -17,215 +30,221 @@ class Trainer:
         self.draw_inter_arrivals = draw_inter_arrivals
 
         self.test_loss = []
-
-
-        self.fig_dir = create_plot_dir(self.model_config, self.env_config, experiment_name = experiment_name)
-        self.loss_dir = create_loss_dir(self.model_config, self.env_config, experiment_name = experiment_name)
-
+        self.fig_dir = create_plot_dir(self.model_config, self.env_config, experiment_name=experiment_name)
+        self.loss_dir = create_loss_dir(self.model_config, self.env_config, experiment_name=experiment_name)
         self.experiment_name = experiment_name
 
+        self.device = torch.device(self.model_config['env']['device'])
 
-
+    # ------------------------------ 训练 ------------------------------ #
     def train_epoch(self):
-        # print('1')
-        dq = BatchedDiffDES(self.env_config['network'], self.env_config['mu'], self.env_config['h'], queue_event_options = self.env_config['queue_event_options'], batch = 1,
-                                    temp = self.model_config['env']['env_temp'], seed = self.model_config['env']['train_seed'],
-                                    device = torch.device(self.model_config['env']['device']), draw_service = self.draw_service, draw_inter_arrivals = self.draw_inter_arrivals)
+        B_train = self.model_config['opt']['train_batch']  # 并行轨迹数
+        # 单实例 batched 环境
+        dq = BatchedDiffDES(
+            self.env_config['network'],
+            self.env_config['mu'],
+            self.env_config['h'],
+            queue_event_options=self.env_config.get('queue_event_options', None),
+            default_B=B_train,
+            temp=self.model_config['env']['env_temp'],
+            seed=self.model_config['env']['train_seed'],
+            device=self.device,
+            draw_service=self.draw_service,
+            draw_inter_arrivals=self.draw_inter_arrivals,
+        )
 
-        # zero out the optimizer
+        # reset（用 gen_params 指定 batch 维）
+        td = dq.reset(dq.gen_params(batch_size=[B_train]))  # td['queues']: [B,Q], td['time']: [B,1]
+
         self.optimizer.zero_grad()
 
-        # save grads
+        # 可选：记录梯度（保持你原本的 hooks）
         back_outs = []
         def action_hook(grad):
-            #grad = torch.clamp(grad, -threshold,threshold)
-            back_outs.append(grad.tolist())
-            #return grad
-        
+            back_outs.append(grad.detach().cpu().tolist())
+
         nn_back_ins = []
         def priority_hook(grad):
-            nn_back_ins.append(grad.tolist())
+            nn_back_ins.append(grad.detach().cpu().tolist())
 
-        # Train loop
-        obs, state = dq.reset(seed = self.model_config['env']['train_seed'])
-        total_cost = torch.tensor([[0.]]*self.model_config['opt']['train_batch']).to(self.model_config['env']['device'])
-        time_weight_queue_len = torch.tensor([[0.]]*self.model_config['opt']['train_batch']).to(self.model_config['env']['device'])
-        
+        total_cost = torch.zeros((B_train, 1), device=self.device)
+        time_weight_queue_len = torch.zeros((B_train, self.env_config['network'].shape[-1]), device=self.device)
+
+        S = dq.S
+        Q = dq.Q
+
         for _ in trange(self.env_config['train_T'], disable=False):
-            queues, time = dq.obs.queues, dq.obs.time
-            
-            pr = self.policy.train_forward(queues, time, dq.network, dq.h.unsqueeze(0).repeat(1,dq.s,1), dq.mu)
-            
-            pr.register_hook(priority_hook)
-            
-            # server pools
-            pr = pr.repeat_interleave(1, dim = 1)
-            
-            if self.model_config['policy']['train_policy'] == 'sinkhorn':
-                lex = torch.zeros(dq.batch, dq.s, dq.q).to(self.model_config['env']['device'])
-                v, s_bar, q_bar = rt.pad_pool(2*pr + lex, queues.detach(), network = dq.network, device = self.model_config['env']['device'], server_pool_size = self.env_config['server_pool_size'])
+            queues = td["queues"]  # [B,Q]
+            time   = td["time"]    # [B,1]
 
-                pr = rt.Sinkhorn.apply(-v, s_bar, q_bar, 
-                                        self.model_config['policy']['sinkhorn']['num_iter'],
-                                        self.model_config['policy']['sinkhorn']['temp'],
-                                        self.model_config['policy']['sinkhorn']['eps'],
-                                        self.model_config['policy']['sinkhorn']['back_temp'],
-                                        self.model_config['env']['device'])[:,:dq.s,:dq.q]
-                
-                
+            # 注意：保持你 policy 接口一致
+            pr = self.policy.train_forward(
+                queues, time,
+                dq.network,                                 # [S,Q]
+                dq.h.unsqueeze(0).expand(1, S, Q),          # [1,S,Q]（与你原代码接口一致）
+                dq.mu.view(1, S, Q)                         # [1,S,Q]
+            )
+            pr.register_hook(priority_hook)
+
+            # 如果你训练阶段有“server pools”，可保留 repeat_interleave（原代码是 1）
+            pr = pr.repeat_interleave(1, dim=1)
+
+            # ---- 你的策略分支（按需保留/修改） ----
+            if self.model_config['policy']['train_policy'] == 'sinkhorn':
+                # 需要 rt.pad_pool / rt.Sinkhorn；若你的工程里叫别的名字，请自行改动
+                lex = torch.zeros(B_train, S, Q, device=self.device)
+                v, s_bar, q_bar = rt.pad_pool(
+                    2 * pr + lex, queues.detach(),
+                    network=dq.network, device=self.device,
+                    server_pool_size=self.env_config['server_pool_size']
+                )
+                pr = rt.Sinkhorn.apply(
+                    -v, s_bar, q_bar,
+                    self.model_config['policy']['sinkhorn']['num_iter'],
+                    self.model_config['policy']['sinkhorn']['temp'],
+                    self.model_config['policy']['sinkhorn']['eps'],
+                    self.model_config['policy']['sinkhorn']['back_temp'],
+                    self.model_config['env']['device']
+                )[:, :S, :Q]
+
             elif self.model_config['policy']['train_policy'] == 'softmax':
-                
-                pr = F.softmax(pr) * self.env_config['network'].unsqueeze(0)
-                pr = torch.minimum(pr, queues.unsqueeze(1).repeat(1,self.env_config['network'].shape[-2],1)).clip(min = 1e-4)
-                pr /= torch.sum(pr, dim = -1).unsqueeze(-1)
-            else:
-                pass
-            
-            # print(pr)
+                pr = F.softmax(pr, dim=-1) * dq.network.unsqueeze(0)       # [B,S,Q]
+                pr = torch.minimum(pr, queues.unsqueeze(1).expand(-1, S, -1)).clamp_min(1e-4)
+                pr = pr / (pr.sum(dim=-1, keepdim=True) + 1e-8)
+
+            # 最终的动作（环境里会按你“离散名额分配”逻辑使用 action）
             action = pr
-            # print(action)
-            # print(queues)
             action.register_hook(action_hook)
-            
-            queues, reward, done, truncated, info = dq.step(action)
-            # print(f"info: {info['cost']}", total_cost)
-            total_cost = total_cost + info['cost']
-            
-            
-            time_weight_queue_len = time_weight_queue_len + info['queues'] * info['event_time']
-        
-        # Backward
-        
+
+            # TorchRL step：传入 TensorDict
+            out = dq.step(TensorDict({"action": action}, batch_size=[B_train]))
+            # 统计
+            total_cost += out["cost"]                              # [B,1]
+            time_weight_queue_len += out["queues"] * out["event_time"]  # [B,Q]
+            # 下一步
+            td = out.select("queues", "time", "params")
+
+        # 反传 + 优化
         loss = torch.mean(total_cost / self.env_config['train_T'])
         loss.backward()
-
-
-        state = dq.obs
-        # print(f"total_cost:\t{total_cost}, time:{state.time}")
-        print(f"train cost:\t{torch.mean(total_cost / state.time)}")
-        print(f"queue lengths: \t{torch.mean(time_weight_queue_len / state.time, dim = 0)}")
-        # Gradient clipping and step
-        torch.nn.utils.clip_grad_norm_(self.policy.network.parameters(), max_norm = self.model_config['opt']['grad_clip_norm'])
+        torch.nn.utils.clip_grad_norm_(self.policy.network.parameters(),
+                                       max_norm=self.model_config['opt']['grad_clip_norm'])
         self.optimizer.step()
 
-        if not self.model_config['env']['train_restart']:
-            init_train_queues = queues.detach()
+        # 打印训练期指标
+        current_time = td["time"]  # [B,1]
+        train_cost_per_env = (total_cost / current_time).squeeze(-1)  # [B]
+        twql_per_env = (time_weight_queue_len / current_time)         # [B,Q]
 
-        if self.model_config['env']['print_grads']:
-            print("Action Grads")
-            print(torch.mean(torch.sum(torch.tensor(back_outs),0),0))
+        print(f"train cost mean: {train_cost_per_env.mean().item():.6f}")
+        print(f"train time-weighted mean queue len per q: {twql_per_env.mean(dim=0).tolist()}")
 
-            print("Priority Grads")
-            print(torch.mean(torch.sum(torch.tensor(nn_back_ins),0),0))
+        if self.model_config['env'].get('print_grads', False) and len(back_outs) > 0 and len(nn_back_ins) > 0:
+            action_grads = torch.tensor(back_outs).sum(0).mean(0)
+            pri_grads = torch.tensor(nn_back_ins).sum(0).mean(0)
+            print("Action Grads (mean over steps):", action_grads)
+            print("Priority Grads (mean over steps):", pri_grads)
 
+    # ------------------------------ 测试 ------------------------------ #
     def test_epoch(self, epoch):
+        B_test = self.model_config['opt']['test_batch']
 
-        test_dq_batch, lex_batch, obs_batch, state_batch, total_cost_batch, time_weight_queue_len_batch = self.create_batch_dq(self.model_config['opt']['test_batch'], self.model_config['env']['test_seed'])
-        
+        dq = BatchedDiffDES(
+            self.env_config['network'],
+            self.env_config['mu'],
+            self.env_config['h'],
+            queue_event_options=self.env_config.get('queue_event_options', None),
+            default_B=B_test,
+            temp=self.model_config['env']['env_temp'],
+            seed=self.model_config['env']['test_seed'],
+            device=self.device,
+            draw_service=self.draw_service,
+            draw_inter_arrivals=self.draw_inter_arrivals,
+        )
+
+        td = dq.reset(dq.gen_params(batch_size=[B_test]))
+
+        total_cost = torch.zeros((B_test, 1), device=self.device)
+        time_weight_queue_len = torch.zeros((B_test, self.env_config['network'].shape[-1]), device=self.device)
+
+        S = dq.S
+        Q = dq.Q
+
         with torch.no_grad():
-            pbar = trange(self.env_config['test_T'], desc=f"{datetime.now().strftime('%Y-%m-%d-%H-%M-%S')} - {self.experiment_name}", disable=False)
+            pbar = trange(self.env_config['test_T'],
+                          desc=f"{datetime.now().strftime('%Y-%m-%d-%H-%M-%S')} - {self.experiment_name}",
+                          disable=False)
             for step in pbar:
-                
-                current_time = datetime.now().strftime('%Y-%m-%d-%H-%M-%S')
-                description = f"{current_time} - {self.experiment_name}"
-                # Update the description in each iteration
-                pbar.set_description(description)
-            
+                queues = td["queues"]   # [B,Q]
+                time   = td["time"]     # [B,1]
 
-                batch_queue = torch.cat([obs[0] for obs in obs_batch], dim = 0)
+                # 组装“重复版”输入，保持你原来的 policy 接口
+                repeated_queue   = queues.unsqueeze(1).expand(-1, S, -1)          # [B,S,Q]
+                repeated_network = dq.network.unsqueeze(0).expand(B_test, -1, -1) # [B,S,Q]
+                repeated_mu      = dq.mu.view(1, S, Q).expand(B_test, -1, -1)     # [B,S,Q]
+                repeated_h       = dq.h.view(1, 1, Q).expand(B_test, S, -1)       # [B,S,Q]
 
-                batch_time = torch.cat([obs[1] for obs in obs_batch], dim = 0)
-                repeated_queue = batch_queue.unsqueeze(1).repeat(1,self.env_config['network'].shape[-2],1)
-                repeated_network = test_dq_batch[-1].network.repeat(self.model_config['opt']['test_batch'], 1, 1)
-                repeated_mu = self.env_config['mu'].repeat(self.model_config['opt']['test_batch'], 1, 1)
-                repeated_h = torch.tensor(self.env_config['h']).repeat(self.model_config['opt']['test_batch'],self.env_config['network'].shape[-2],1)
+                pr = self.policy.test_forward(
+                    step, queues, time,
+                    repeated_queue, repeated_network, repeated_mu, repeated_h
+                )
 
-                pr = self.policy.test_forward(step, batch_queue, batch_time, repeated_queue, repeated_network, repeated_mu, repeated_h)
+                pr = pr.repeat_interleave(1, dim=1)  # 如果你需要保持一致；否则可以去掉
 
-                pr = pr.repeat_interleave(1, dim = 1)
-                # test policy
+                # ---- 测试策略分支（与你原代码一致） ----
                 if self.model_config['policy']['test_policy'] == 'sinkhorn':
-                    lex = torch.zeros(test_dq_batch[-1].batch, test_dq_batch[-1].s, test_dq_batch[-1].q).to(self.model_config['env']['device'])
-                    v, s_bar, q_bar = rt.pad_pool(2*pr + lex, batch_queue.detach(), network = test_dq_batch[-1].network.repeat(self.model_config['opt']['test_batch'], 1, 1), device = self.model_config['env']['device'], server_pool_size = self.env_config['server_pool_size'])
+                    lex = torch.zeros(B_test, S, Q, device=self.device)
+                    v, s_bar, q_bar = rt.pad_pool(
+                        2 * pr + lex, queues.detach(),
+                        network=dq.network, device=self.device,
+                        server_pool_size=self.env_config['server_pool_size']
+                    )
+                    pr = rt.Sinkhorn.apply(
+                        -v, s_bar, q_bar,
+                        self.model_config['policy']['sinkhorn']['num_iter'],
+                        self.model_config['policy']['sinkhorn']['temp'],
+                        self.model_config['policy']['sinkhorn']['eps'],
+                        self.model_config['policy']['sinkhorn']['back_temp'],
+                        self.model_config['env']['device']
+                    )[:, :S, :Q]
 
-                    pr = rt.Sinkhorn.apply(-v, s_bar, q_bar, 
-                                            self.model_config['policy']['sinkhorn']['num_iter'],
-                                            self.model_config['policy']['sinkhorn']['temp'],
-                                            self.model_config['policy']['sinkhorn']['eps'],
-                                            self.model_config['policy']['sinkhorn']['back_temp'],
-                                            self.model_config['env']['device'])[:,:test_dq_batch[-1].s,:test_dq_batch[-1].q]
                 elif self.model_config['policy']['test_policy'] == 'linear_assigment':
-                    lex = torch.zeros(test_dq_batch[-1].batch, test_dq_batch[-1].s, test_dq_batch[-1].q).to(self.model_config['env']['device'])
-                    v, s_bar, q_bar = rt.pad_pool(2*pr + lex, batch_queue.detach(), network = test_dq_batch[-1].network.repeat(self.model_config['opt']['test_batch'], 1, 1), device = self.model_config['env']['device'], server_pool_size = self.env_config['server_pool_size'])
+                    lex = torch.zeros(B_test, S, Q, device=self.device)
+                    v, s_bar, q_bar = rt.pad_pool(
+                        2 * pr + lex, queues.detach(),
+                        network=dq.network, device=self.device,
+                        server_pool_size=self.env_config['server_pool_size']
+                    )
                     pr = rt.linear_assignment_batch(v, s_bar, q_bar)
-                    
-                    
+
                 elif self.model_config['policy']['test_policy'] == 'softmax':
-                    pr = F.softmax(pr) * repeated_network
-                    pr = torch.minimum(pr, repeated_queue).clip(min = 1e-4)
-                    pr /= torch.sum(pr, dim = -1).unsqueeze(-1)
-                else:
-                    pass
-                # print(pr[0])
+                    pr = F.softmax(pr, dim=-1) * repeated_network
+                    pr = torch.minimum(pr, queues.unsqueeze(1).expand(-1, S, -1)).clamp_min(1e-4)
+                    pr = pr / (pr.sum(dim=-1, keepdim=True) + 1e-8)
+
+                # 测试时你原来做的是四舍五入为整数名额
                 action = torch.round(pr)
 
-                # print(action[0])
-                # print(batch_queue[0], total_cost_batch[0]/ state_batch[0].time)
-                # print(batch_queue)
-                
-                for test_dq_idx in range(len(test_dq_batch)):
-                    # print(action)
-                    _, _, _, _, info = test_dq_batch[test_dq_idx].step(action[test_dq_idx])
-                    obs_batch[test_dq_idx], state_batch[test_dq_idx], cost, event_time  = info['obs'], info['state'], info['cost'], info['event_time']
-                    total_cost_batch[test_dq_idx] = total_cost_batch[test_dq_idx] + cost
-                    time_weight_queue_len_batch[test_dq_idx] = time_weight_queue_len_batch[test_dq_idx] + info['queues'] * info['event_time']
-                # print(obs_batch[0])
+                out = dq.step(TensorDict({"action": action}, batch_size=[B_test]))
 
-        # # Test cost metrics
-        # # pdb.set_trace()
-        # test_cost_batch = [total_cost_batch[test_dq_idx] / state_batch[test_dq_idx].time for test_dq_idx in range(len(test_dq_batch))]
-        # test_cost = torch.mean(torch.concat(test_cost_batch))
-        # test_std = torch.std(torch.concat(test_cost_batch))
-        # test_queue_len = torch.mean(torch.concat([time_weight_queue_len_batch[test_dq_idx] / state_batch[test_dq_idx].time for test_dq_idx in range(len(test_dq_batch))]), dim = 0)
-        # test_queue_len = [float(_item) for _item in test_queue_len.to('cpu').detach().numpy().tolist()]
-        # self.test_loss.append({'epoch': epoch,
-        #                 'test_loss': float(test_cost),
-        #                 'test_loss_std': float(test_std),
-        #                 'mean_queue_length': test_queue_len})
-        #
-        # print(f'------------------------test result------------------------')
-        # print(f"experiment: {self.experiment_name}")
-        # print(f"queue lengths: \t{test_queue_len}")
-        # print(f'average: {sum(test_queue_len) / len(test_queue_len):.2f}')
-        # print(f"test cost: \t{test_cost}")
-        #
-        #
-        # ---------- Test metrics (mean / std / SE) ----------
-        B = len(test_dq_batch)
+                total_cost += out["cost"]
+                time_weight_queue_len += out["queues"] * out["event_time"]
 
-        # 每个并行环境的平均 cost（标量）
-        cost_per_env = torch.concat([
-            total_cost_batch[i] / state_batch[i].time
-            for i in range(B)
-        ]).squeeze()  # shape [B]
+                # 下一步
+                td = out.select("queues", "time", "params")
 
+        # -------- 汇总测试指标 --------
+        time_now = td["time"]  # [B,1]
+        cost_per_env = (total_cost / time_now).squeeze(-1)  # [B]
         test_cost_mean = cost_per_env.mean()
-        test_cost_std  = cost_per_env.std(unbiased=True)     # 样本标准差
-        test_cost_se   = test_cost_std / math.sqrt(B)
+        test_cost_std  = cost_per_env.std(unbiased=True)
+        test_cost_se   = test_cost_std / math.sqrt(B_test)
 
-        # 每个环境的时间加权平均队长 (向量 [q])，堆成 [B, q]
-        qlen_per_env = torch.concat([
-            time_weight_queue_len_batch[i] / state_batch[i].time
-            for i in range(B)
-        ], dim=0)  # [B, q]
-
-        # -------- overall 队长 --------
-        # 先对每个 env 平均各个队列 -> [B]
-        qlen_overall_per_env = qlen_per_env.mean(dim=1)
-
+        qlen_per_env = (time_weight_queue_len / time_now)   # [B,Q]
+        qlen_overall_per_env = qlen_per_env.mean(dim=1)     # [B]
         qlen_mean = qlen_overall_per_env.mean()
         qlen_std  = qlen_overall_per_env.std(unbiased=True)
-        qlen_se   = qlen_std / math.sqrt(B)
+        qlen_se   = qlen_std / math.sqrt(B_test)
 
         print(f'------------------------test result------------------------')
         print(f"experiment: {self.experiment_name}")
@@ -235,41 +254,3 @@ class Trainer:
         print(f"test cost mean: {test_cost_mean.item():.4f}")
         print(f"test cost std : {test_cost_std.item():.4f}")
         print(f"test cost se  : {test_cost_se.item():.4f}")
-
-
-
-
-    def create_batch_dq(self, bs, seed):
-        dq_batch = []
-        lex_batch = []
-        obs_batch = []
-        state_batch = []
-        total_cost_batch = []
-        time_weight_queue_len_batch = []
-        for dq_idx in range(bs):
-
-            dq = BatchedDiffDES(self.env_config['network'], self.env_config['mu'], self.env_config['h'],
-                                        queue_event_options= self.env_config['queue_event_options'],
-                                        batch = 1, 
-                                        temp = self.model_config['env']['env_temp'], seed = seed + dq_idx,
-                                        device = torch.device(self.model_config['env']['device']), draw_service = self.draw_service, draw_inter_arrivals = self.draw_inter_arrivals)
-
-
-            lex = torch.zeros(dq.batch, dq.s, dq.q).to(self.model_config['env']['device'])
-        
-            obs, state = dq.reset(seed = seed + dq_idx)
-            
-            total_cost = torch.tensor([[0.]]).to(self.model_config['env']['device'])
-            time_weight_queue_len = torch.tensor([[0.]]).to(self.model_config['env']['device'])
-
-            lex_batch.append(lex)
-            obs_batch.append(obs)
-            state_batch.append(state)
-            total_cost_batch.append(total_cost)
-            time_weight_queue_len_batch.append(time_weight_queue_len)
-
-            dq_batch.append(dq) 
-
-        return dq_batch, lex_batch, obs_batch, state_batch, total_cost_batch, time_weight_queue_len_batch
-
-

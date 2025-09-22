@@ -40,6 +40,7 @@ class BatchedDiffDES(EnvBase):
         device: str = "cuda",
         seed: Optional[int] = None,
         default_B: int = 1,
+        queue_event_options=None,
         verbose: bool = False,
     ):
         super().__init__(batch_size=[])
@@ -61,8 +62,11 @@ class BatchedDiffDES(EnvBase):
         self.eps = 1e-8
         self.big = 1e12
 
-        eye = torch.eye(self.Q, device=self.device)
-        self.queue_event_options = torch.cat([eye, -eye], dim=0)  # [2Q,Q]
+        if queue_event_options is None:
+            eye = torch.eye(self.Q, device=self.device)
+            self.queue_event_options = torch.cat([eye, -eye], dim=0)  # [2Q,Q]
+        else:
+            self.queue_event_options = queue_event_options.to(self.device).float()
 
         self._queues = None
         self._time = None
