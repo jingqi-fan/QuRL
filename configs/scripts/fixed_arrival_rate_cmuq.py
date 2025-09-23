@@ -77,28 +77,35 @@ if lam_params['val'] is None:
 else:
     lam_r = lam_params['val']
 
-def lam(t, rng = None, batch = None):
+lam_r_base = torch.as_tensor(lam_r, dtype=torch.float32)
+
+def lam_torch(env, t: torch.Tensor) -> torch.Tensor:
+    """
+    t: [B,1], 返回 [B,Q] 的到达率（>0），在 env.device 上
+    """
+    device = env.device
+    B = t.shape[0]
+    Q = env.Q
+    lam_r = lam_r_base.to(device).view(1, Q).expand(B, Q)
+
     if lam_type == 'constant':
         lam = lam_r
     elif lam_type == 'step':
-        is_surge = 1*(t.data.cpu().numpy() <= lam_params['t_step'])
-        lam = is_surge * np.array(lam_params['val1']) + (1 - is_surge) * np.array(lam_params['val2'])
+        is_surge = (t.to(device) <= lam_params['t_step']).to(torch.float32)  # [B,1]
+        val1 = torch.as_tensor(lam_params['val1'], dtype=torch.float32, device=device).view(1, Q)
+        val2 = torch.as_tensor(lam_params['val2'], dtype=torch.float32, device=device).view(1, Q)
+        lam = is_surge * val1 + (1.0 - is_surge) * val2                      # [B,Q]
     elif lam_type == 'hyper':
-        scale = lam_params['scale']
-
-        def lam_f(rng, t, batch, p, lam_r, scale):
-            if not rng:
-                return lam_r
-            else:
-                lam_r = lam_r.reshape((1,len(lam_r))).repeat(batch, axis = 0)
-                switch = rng.binomial(1, p, (batch, 1))
-                return switch * (lam_r / (1 + scale)) + (1 - switch) * (lam_r / (1 - scale))
-        f = lambda rng, t, batch, p, lam_r, scale: lam_f(rng, t, batch, p = 0.5, lam_r = lam_r, scale = scale)
-        lam = f(rng, t, batch, p=0.5, lam_r = lam_r, scale = scale)
+        scale = float(lam_params['scale'])
+        # 每个 batch 单元随机切换一种缩放
+        coins = torch.bernoulli(0.5 * torch.ones(B, 1, device=device))       # [B,1] in {0,1}
+        lam_hi = lam_r / (1.0 + scale)
+        lam_lo = lam_r / (1.0 - scale)
+        lam = coins * lam_hi + (1.0 - coins) * lam_lo                         # [B,Q]
     else:
-        return 'Nonvalid arrival rate'
-    
-    return lam
+        raise ValueError(f"Invalid lam_type: {lam_type}")
+
+    return lam.clamp_min(1e-6)
     
 
 if env_config['queue_event_options'] == 'custom':
@@ -122,24 +129,37 @@ def draw_service(self, time):
     return service
 
 
-def draw_inter_arrivals(self, time):
+def draw_service(env, time: torch.Tensor) -> torch.Tensor:
+    """
+    返回 [B,Q] 的正值张量（float32，env.device）
+    若 env_config['service_type']=='hyper'，用两种均值的指数混合；否则默认 Exp(mean=1)
+    """
+    device = env.device
+    B, Q = time.shape[0], env.Q
+    U = torch.rand((B, Q), device=device).clamp_min(1e-6)
 
-    def inter_arrival_dists(state, batch, t):
-        exps = state.exponential(1, (batch, orig_q))
-        lam_rate = lam(t)
-        return exps / lam_rate
+    if env_config.get('service_type') == 'hyper':
+        scale = 0.8  # 你原来的常量
+        coins = torch.bernoulli(0.5 * torch.ones(B, Q, device=device))
+        mean_a, mean_b = 1.0 + scale, 1.0 - scale
+        a = -torch.log(U) * mean_a
+        b = -torch.log(U) * mean_b
+        return (coins * a + (1 - coins) * b).to(torch.float32)
+
+    return (-torch.log(U)).to(torch.float32)  # Exp(mean=1)
 
 
-    interarrivals = torch.tensor(inter_arrival_dists(self.state, self.batch, time)).to(self.device)
-    return interarrivals
+def draw_inter_arrivals(env, time: torch.Tensor) -> torch.Tensor:
+    """
+    返回 [B,Q] 的下一次到达间隔：Exp(rate=λ) => Exp(1)/λ
+    """
+    device = env.device
+    B, Q = time.shape[0], env.Q
+    U = torch.rand((B, Q), device=device).clamp_min(1e-6)
+    exp1 = -torch.log(U)                        # Exp(rate=1)
+    lam  = lam_torch(env, time)                 # [B,Q]
+    return (exp1 / lam).to(torch.float32)
 
-# def draw_inter_arrivals(self, time):
-#     def inter_arrival_dists(state, batch, t):
-#         # 例如从正态分布采样 inter-arrival
-#         arr = state.normal(loc=1.0, scale=0.2, size=(batch, orig_q))
-#         arr = np.clip(arr, 0.01, None)  # 保证正数
-#         return arr
-#     return torch.tensor(inter_arrival_dists(self.state, self.batch, time)).to(self.device)
 
 
 optimizer = None
