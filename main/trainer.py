@@ -226,12 +226,11 @@ class Trainer:
                 action = torch.round(pr)
 
                 out = dq.step(TensorDict({"action": action}, batch_size=[B_test]))
+                # 奖励 / 代价
+                total_cost += out["next", "reward"]
+                time_weight_queue_len += out["next", "queues"] * out["next", "event_time"]
+                td = out["next"].select("queues", "time", "params")
 
-                total_cost += out["cost"]
-                time_weight_queue_len += out["queues"] * out["event_time"]
-
-                # 下一步
-                td = out.select("queues", "time", "params")
 
         # -------- 汇总测试指标 --------
         time_now = td["time"]  # [B,1]

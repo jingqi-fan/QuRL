@@ -298,6 +298,7 @@ class BatchedDiffDES(EnvBase):
                 "time": time_now,
                 "params": TensorDict({"max_jobs": torch.full((B,), self.J, dtype=torch.int64, device=self.device)}, batch_size=bs),
                 "reward": reward,
+                "event_time": event_time,
                 "done": done,
             },
             batch_size=bs,

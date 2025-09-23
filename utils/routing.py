@@ -102,97 +102,131 @@ def pad(vals, queues, network,
 
     return v, s_bar, q_bar
 
+
+
 def pad_pool(vals, queues, network, server_pool_size,
-        device = 'cpu', compliance = True):
+             device='cpu', compliance=True):
+    """
+    vals:   [B,S,Q]  分配打分/价值（越大越好）
+    queues: [B,Q]    当前各队列的作业数（需求）
+    network:[B,S,Q]  0/1 连通掩码（或 [S,Q] 再在外面 expand 到 [B,S,Q]）
+    server_pool_size: [S] 每个 server 的并行名额（float）
+    return:
+      v:     [B,S+1,Q+1]  pad 后的价值矩阵（会在 Sinkhorn 里转成 cost）
+      s_bar: [B,S+1]      server 侧容量（最后一维是“多余队列”的虚拟 server 容量）
+      q_bar: [B,Q+1]      queue  侧容量（最后一维是“多余 server”的虚拟 queue  容量）
+    """
+    device = torch.device(device)
+    vals    = vals.to(device).float()
+    queues  = queues.to(device).float()
+    # network 可以是 [S,Q] 或 [B,S,Q]；统一成 [B,S,Q]
+    if network.dim() == 2:
+        network = network.unsqueeze(0).expand(vals.size(0), -1, -1)
+    network = network.to(device).float()
+    server_pool_size = server_pool_size.to(device).float()  # 关键信息：确保是 float
 
-    
-    # setup mu bar
-    batch = network.size()[0]
-    s = server_pool_size.sum()
-    q = network.size()[2]
+    B, S, Q = vals.shape
 
-    free_servers = server_pool_size.repeat(batch, 1).to(device)
-    pad_q = -torch.ones((batch, 1,q)).to(device)
-    pad_s = -torch.ones((batch, network.shape[1] + 1,1)).to(device)
+    # server 侧总容量 s（标量张量，保持设备）
+    s_total = server_pool_size.sum()  # shape: [] (scalar tensor on device)
 
+    # 每 batch 的 server 容量行向量 [B,S]
+    free_servers = server_pool_size.view(1, S).expand(B, -1)  # [B,S]
+
+    # pad 行/列（-1e9 比 -1 更安全，避免非法边被选到）
+    big_neg = -1e9
+    pad_q = torch.full((B, 1, Q), big_neg, device=device)   # 给“虚拟 queue”的一行
+    pad_s = torch.full((B, S + 1, 1), big_neg, device=device)  # 给“虚拟 server”的一列
+
+    # 合规掩码（非法边给大负值，防止被选择）
     if compliance:
-        vals = vals * network - 1*(network == 0.).to(device)
+        vals = vals * network + big_neg * (network == 0)
 
-    v = torch.cat((vals, pad_q), 1)
-    # print(v.shape, pad_s.shape)
-    v = torch.cat((v, pad_s), 2)
+    # v: 先加一行，再加一列 -> [B,S+1,Q+1]
+    v = torch.cat((vals, pad_q), dim=1)
+    v = torch.cat((v, pad_s), dim=2)
 
-    excess_server = F.relu(s - torch.sum(queues, dim = 1)).unsqueeze(1).to(device)
-    q_bar = torch.hstack((queues, excess_server)).to(device)
+    # q_bar（队列侧容量）= [queues, excess_server]
+    # excess_server = max(0, s_total - sum_q) ；sum_q: [B]
+    excess_server = F.relu(s_total - queues.sum(dim=1)).unsqueeze(1)  # [B,1]
+    q_bar = torch.hstack((queues, excess_server))  # [B,Q+1]
 
-    excess_queues = F.relu(torch.sum(queues, dim = 1) - s).unsqueeze(1).to(device)
-    s_bar = torch.hstack((free_servers, excess_queues)).to(device)
+    # s_bar（server侧容量）= [free_servers, excess_queues]
+    # excess_queues = max(0, sum_q - s_total)
+    excess_queues = F.relu(queues.sum(dim=1) - s_total).unsqueeze(1)  # [B,1]
+    s_bar = torch.hstack((free_servers, excess_queues))  # [B,S+1]
 
     return v, s_bar, q_bar
-        
+
+
 class Sinkhorn(torch.autograd.Function):
     @staticmethod
-    def forward(ctx, c, a, b, num_iter, temp, eps = 1e-6, back_temp = None, device = 'cpu'):
-        
-        log_p = -c / temp
-        
-        a_dim = 2
-        b_dim = 1
+    def forward(ctx, c, a, b, num_iter, temp, eps=1e-6, back_temp=None, device='cpu'):
+        """
+        c:   [B,M,N]  cost 矩阵（你会传 -v 进来）
+        a:   [B,M]    行边缘（server 侧容量）
+        b:   [B,N]    列边缘（queue  侧容量）
+        """
+        device = torch.device(device)
+        c = c.to(device).float()
+        a = a.to(device).float()
+        b = b.to(device).float()
 
-        log_a = torch.log(torch.clamp(a, eps)).unsqueeze(dim=2)
-        log_b = torch.log(torch.clamp(b, eps)).unsqueeze(dim=1)
+        # log-domain Sinkhorn，稳定性更好
+        log_p = -c / temp  # [B,M,N]
+        log_a = torch.log(a.clamp_min(eps)).unsqueeze(2)  # [B,M,1]
+        log_b = torch.log(b.clamp_min(eps)).unsqueeze(1)  # [B,1,N]
 
         for _ in range(num_iter):
-            log_p -= (torch.logsumexp(log_p, dim=1, keepdim=True) - log_b)
-            log_p -= (torch.logsumexp(log_p, dim=2, keepdim=True) - log_a)
-        
-        p = torch.exp(log_p)
-        ctx.save_for_backward(p, torch.sum(p, dim=2), torch.sum(p, dim=1))
+            log_p -= (torch.logsumexp(log_p, dim=1, keepdim=True) - log_b)  # 列归一化 -> b
+            log_p -= (torch.logsumexp(log_p, dim=2, keepdim=True) - log_a)  # 行归一化 -> a
+
+        p = torch.exp(log_p)  # [B,M,N]
+        # 保存 p、行/列和，用于 backward
+        ctx.save_for_backward(p, p.sum(dim=2), p.sum(dim=1))
         ctx.temp = temp
         ctx.back_temp = back_temp
         ctx.device = device
-        
         return p
 
     @staticmethod
     def backward(ctx, grad_p):
-        
-        p, a, b = ctx.saved_tensors
-        batch, m, n = p.shape
-
+        p, a, b = ctx.saved_tensors  # a=[B,M], b=[B,N]
+        B, M, N = p.shape
         device = ctx.device
-        
-        a = torch.clamp(a, 1e-1)
-        b = torch.clamp(b, 1e-1)
-        
-        if ctx.back_temp is not None:
-            grad_p *= -1 / ctx.back_temp * p
-        else:
-            grad_p *= -1 / ctx.temp * p
 
+        a = a.clamp_min(1e-1)
+        b = b.clamp_min(1e-1)
+
+        # d exp(log_p) / d log_p = p
+        scale = -1.0 / (ctx.back_temp if ctx.back_temp is not None else ctx.temp)
+        grad_p = grad_p.to(device) * (scale * p)
+
+        # 组块矩阵 K_b （数值加一点对角）
         K_b = torch.cat((
             torch.cat((torch.diag_embed(a), p), dim=2),
-            torch.cat((torch.transpose(p, 1, 2), torch.diag_embed(b)), dim=2)),
-            dim = 1)[:,:-1,:-1]
-        
-        I = torch.eye(K_b.size()[1]).to(device)
-        n_batch = torch.tensor([1.0]*batch).to(device)
-        batch_eye = torch.einsum('ij,k->kij', I, n_batch)
-        
-        K_b = K_b + 0.01*batch_eye
+            torch.cat((p.transpose(1, 2), torch.diag_embed(b)), dim=2)
+        ), dim=1)[:, :-1, :-1]  # [B, M+N-1, M+N-1]
 
+        I = torch.eye(K_b.size(1), device=device)
+        K_b = K_b + 1e-2 * I.unsqueeze(0)  # 稳定性
 
+        # 右端项 t_b
         t_b = torch.cat((
-            grad_p.sum(dim=2),
-            grad_p[:,:,:-1].sum(dim=1)),
-            dim = 1).unsqueeze(2)
+            grad_p.sum(dim=2),            # [B,M]
+            grad_p[:, :, :-1].sum(dim=1)  # [B,N-1]
+        ), dim=1).unsqueeze(2)            # [B, M+N-1, 1]
 
+        # batched solve
+        # torch>=2.0 可用 torch.linalg.solve; 老版本可循环
+        grad_ab_b = torch.linalg.solve(K_b, t_b)  # [B, M+N-1, 1]
+        grad_a_b = grad_ab_b[:, :M, :]
+        grad_b_b = torch.cat(
+            (grad_ab_b[:, M:, :], torch.zeros((B, 1, 1), dtype=torch.float32, device=device)),
+            dim=1
+        )
 
-        grad_ab_b = torch.linalg.solve(K_b, t_b)
-        grad_a_b = grad_ab_b[:, :m, :]
-        grad_b_b = torch.cat((grad_ab_b[:, m:, :], torch.zeros((batch, 1, 1), dtype=torch.float32).to(device)), dim=1)
+        U = grad_a_b + grad_b_b.transpose(1, 2)  # [B,M,1] + [B,1,N] -> broadcast
 
-        U = grad_a_b + torch.transpose(grad_b_b, 1, 2)
-
-        grad_p -= p * U
+        grad_p = grad_p - p * U  # chain rule 校正
         return grad_p, None, None, None, None, None, None, None
