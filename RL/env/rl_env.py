@@ -1,137 +1,128 @@
+# env_views.py
 import torch
 from tensordict import TensorDict, TensorDictBase
-from torchrl.data import Composite, Unbounded
-from torchrl.envs import EnvBase
-from torchrl.envs.utils import step_mdp
+from torchrl.data import Composite, Bounded, Unbounded
 
-from main.env_topk import BatchedDiffDES
+from main.env import BatchedDiffDES  # 确保导入路径指向你刚才发的那个 env 定义
 
 
-# 假设你已有 BatchedDiffDES（上一版可批处理的 TorchRL 环境）
-# from your_module import BatchedDiffDES
-
-class TRLContinuousEnv(BatchedDiffDES):
+class RLViewDiffDES(BatchedDiffDES):
     """
-    纯连续动作的 TorchRL 包装环境（不依赖 gym）。
-    - 继承 BatchedDiffDES
-    - 观测里新增 "observation": queues 或 cat(queues, time)
-    - 奖励缩放 reward_scale
+    继承 BatchedDiffDES，加入 time 可见性开关：
+      - time_f=True: 观测包含 'time'
+      - time_f=False: 观测不包含 'time'（仅 'queues' 与 'params'）
+    其他行为与父类一致。
     """
 
     def __init__(
         self,
-        network: torch.Tensor,          # [S,Q]
-        mu: torch.Tensor,               # [S,Q]
-        h: torch.Tensor,                # [Q]
-        draw_service,                   # fn(env, t:[B,1]) -> [B,Q]
-        draw_inter_arrivals,            # fn(env, t:[B,1]) -> [B,Q]
-        *,
-        max_jobs: int = 64,
-        temp: float = 1.0,
-        device: str = "cpu",
-        seed: int | None = None,
-        default_B: int = 1,
-        verbose: bool = False,
-        # wrapper 选项：
-        reward_scale: float = 1.0,
-        time_f: bool = False,           # True: observation=cat(queues, time)
+        *args,
+        time_f: bool = True,
+        **kwargs,
     ):
-        super().__init__(
-            network=network,
-            mu=mu,
-            h=h,
-            draw_service=draw_service,
-            draw_inter_arrivals=draw_inter_arrivals,
-            max_jobs=max_jobs,
-            temp=temp,
-            device=device,
-            seed=seed,
-            default_B=default_B,
-            verbose=verbose,
-        )
-        self.reward_scale = float(reward_scale)
-        self.time_f = bool(time_f)
+        self.time_f = time_f
+        super().__init__(*args, **kwargs)
 
-        # —— 扩展 observation_spec，新增一个 "observation" 键 —— #
-        obs_dim = self.Q + (1 if self.time_f else 0)
-        self.observation_spec = Composite(
-            **self.observation_spec._specs,            # 继承父类已有的 queues/time/params
-            observation=Unbounded(shape=(obs_dim,), dtype=torch.float32),
-            shape=(),
-        )
-        # action_spec / reward_spec / done_spec 直接沿用父类
+    # 重新构造 spec，使 observation_spec 与可见字段一致
+    def _make_spec(self):
+        # 先调用父类，拿到完整 spec
+        super()._make_spec()
 
-    # --- 构造 observation 张量 ---
-    def _build_observation(self, queues: torch.Tensor, time_now: torch.Tensor) -> torch.Tensor:
-        # queues: [B,Q], time_now: [B,1]
+        # 根据开关裁剪 observation_spec
         if not self.time_f:
-            return queues
-        return torch.cat([queues, time_now], dim=-1)  # [B,Q+1]
+            # 仅保留 queues 与 params
+            self.observation_spec = Composite(
+                queues=Bounded(low=0.0, high=float("inf"), shape=(self.Q,), dtype=torch.float32),
+                # params=Composite(
+                #     max_jobs=Bounded(low=1, high=self.J, shape=(), dtype=torch.int64),
+                #     shape=(),
+                # ),
+                shape=(),
+            )
+            # state_spec 可以保持与 observation_spec 一致（也可保留父类，不影响内部状态）
+            self.state_spec = self.observation_spec.clone()
 
-    # --- 覆盖 _reset：把 observation 填进去 ---
-    def _reset(self, tensordict: TensorDictBase | None) -> TensorDictBase:
-        td = super()._reset(tensordict)
-        td.set("observation", self._build_observation(td["queues"], td["time"]))
-        return td
-
-    # --- 覆盖 _step：奖励缩放 + observation ---
-    def _step(self, tensordict: TensorDictBase) -> TensorDictBase:
-        out = super()._step(tensordict)  # 读 "action":[B,S,Q]，返回 queues/time/reward/done/params
-        if self.reward_scale != 1.0:
-            out.set("reward", out.get("reward") * self.reward_scale)
-        out.set("observation", self._build_observation(out["queues"], out["time"]))
+    # 工具：按需裁剪观测（去掉 time）
+    def _filter_obs(self, td: TensorDictBase) -> TensorDictBase:
+        if self.time_f:
+            return td
+        # 仅选择 queues / params；reward/done 不在 obs 里，这里不动
+        if "queues" in td.keys() or "params" in td.keys():
+            return td.select("queues", "params")
+        # 如果是 step 的整体输出，需要只裁剪“观测相关”的键
+        # 这里假设父类 reset/step 返回的是顶层 obs（而非 next 包装）
+        keys = []
+        if "queues" in td.keys(): keys.append("queues")
+        if "params" in td.keys(): keys.append("params")
+        # 其他键原样带出
+        out = TensorDict({}, batch_size=td.batch_size)
+        for k, v in td.items():
+            if k in ("queues", "time", "params"):
+                # 观测相关：按开关处理
+                if k == "time":
+                    continue
+                out.set(k, v)
+            else:
+                # 非观测（如 reward / done 等）保留
+                out.set(k, v)
         return out
 
+    # 覆盖 reset：裁剪 time
+    def _reset(self, tensordict: TensorDictBase | None) -> TensorDictBase:
+        td = super()._reset(tensordict)
+        return self._filter_obs(td)
 
-# ----------------- 用法示例 -----------------
+    # 覆盖 step：裁剪 time
+    def _step(self, tensordict: TensorDictBase) -> TensorDictBase:
+        out = super()._step(tensordict)
+        return self._filter_obs(out)
+
+
+# 假设 RLViewDiffDES 已经在同目录导入
+# from your_env_file import RLViewDiffDES
+
+def dummy_draw_service(env, t):
+    """返回正态分布的 service times"""
+    B = t.shape[0]
+    return torch.ones(B, env.Q, device=env.device)
+
+def dummy_draw_inter_arrivals(env, t):
+    """返回常数 inter-arrivals"""
+    B = t.shape[0]
+    return torch.ones(B, env.Q, device=env.device) * 2.0
+
 if __name__ == "__main__":
-    S, Q, J = 3, 2, 16
-    device = "cuda"
+    # 配置环境
+    S, Q = 2, 3  # 2 个服务器，3 个队列
+    network = torch.ones(S, Q)  # fully connected
+    mu = torch.ones(S, Q)       # unit service rate
+    h = torch.arange(1, Q+1).float()  # [1,2,3] as weights
 
-    network = torch.tensor([[1, 1],
-                            [1, 0],
-                            [0, 1]], dtype=torch.float32)
-    mu = torch.ones(S, Q)
-    h = torch.tensor([1.0, 1.0])
+    env = RLViewDiffDES(
+        network=network,
+        mu=mu,
+        h=h,
+        draw_service=dummy_draw_service,
+        draw_inter_arrivals=dummy_draw_inter_arrivals,
+        max_jobs=4,
+        temp=1.0,
+        device="cuda",
+        default_B=2,   # batch = 2
+        time_f=False,   # 👈 开关控制是否在 obs 里包含 time
+    )
 
-    # 采样器：指数分布（确保在 env.device 上）
-    def draw_service(env, t):
-        B = t.size(0)
-        return torch.distributions.Exponential(rate=torch.ones(B, Q, device=env.device)).sample()
+    # reset
+    td = env.reset()
+    print("=== Reset obs ===")
+    print(td)
 
-    def draw_inter_arrivals(env, t):
-        B = t.size(0)
-        return torch.distributions.Exponential(rate=torch.ones(B, Q, device=env.device)).sample()
-
-    env = TRLContinuousEnv(
-        network, mu, h,
-        draw_service, draw_inter_arrivals,
-        max_jobs=J, temp=1.0, device=device, seed=0,
-        reward_scale=0.1,
-        time_f=True,        # observation = cat(queues, time)
-    ).to(device)
-
-    # 按教程风格动态 batch
-    BATCH = 3
-    td0 = env.reset(env.gen_params(batch_size=[BATCH]))
-    print("reset:", td0.batch_size, td0["observation"].shape, td0["observation"].device)
-
-    # 连续动作： [B,S,Q]
-    action = torch.rand(BATCH, S, Q, device=env.device)
-    td1 = env.step(TensorDict({"action": action}, batch_size=[BATCH]))
-    # print("step reward:", td1.get("reward").shape, td1.get("reward").device)
-
-    # 手写 rollout（batch 自适应）
-    def simple_rollout(env: EnvBase, steps=10):
-        _data = env.reset(env.gen_params(batch_size=[BATCH]))
-        B = _data.batch_size
-        traj = TensorDict({}, [*B, steps], device=env.device)
-        for t in range(steps):
-            _data["action"] = env.action_spec.rand(B).to(env.device)  # 连续动作采样
-            _data = env.step(_data)
-            traj[..., t] = _data
-            _data = step_mdp(_data, keep_other=True)
-        return traj
-
-    ro = simple_rollout(env, steps=5)
-    print("rollout obs:", ro.get(("next", "observation")).shape)
+    # 随机动作 step
+    for i in range(5):
+        B = td.batch_size[0]
+        action = torch.rand(B, S, Q)
+        # td = env.step(TensorDict({"action": action}, batch_size=[B]))
+        # print(f"\n=== Step {i} ===")
+        # print("queues:", td["next", "queues"])
+        # print("time:", td["next", "time"])
+        # print("reward:", td["next", "reward"])
+        # print("done:", td["next", "done"])

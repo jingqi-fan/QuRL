@@ -126,8 +126,7 @@ class BatchedDiffDES(EnvBase):
         elif tensordict.batch_size != torch.Size([]):
             B = tensordict.batch_size
         else:
-            B = self.default_B
-
+            B = torch.Size([self.default_B])
         queues = tensordict.get("queues", torch.zeros(B + (self.Q,), device=self.device)).float()
         time_now = tensordict.get("time", torch.zeros(B + (1,), device=self.device)).float()
 
