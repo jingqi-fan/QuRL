@@ -12,7 +12,7 @@ env:
   batch: 3
 model: 
   policy_name: "vanilla"
-  scale: 10
+  scale: 3
 training:   
   behavior_cloning: False
   normalize_advantage: True
@@ -25,10 +25,10 @@ training:
   per_iter_normal_obs: False
   per_iter_normal_value: False
   actors: 2
-  episode_steps: 16
+  episode_steps: 4
   num_epochs: 2
-  train_batch: 8
-  test_batch: 8
+  train_batch: 2
+  test_batch: 2
   lr: 0.0003 
   lr_policy: 0.0009
   lr_value: 0.0003

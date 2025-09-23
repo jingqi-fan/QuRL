@@ -1,202 +1,146 @@
-import os, sys, yaml, time
+# QGymGPU/RL/train.py
+import os
+import argparse
+import yaml
+from RL.utils.load_rl_env import load_rl_env
+from torch.distributions import Categorical
 import torch
 import torch.nn as nn
-from tensordict.nn import TensorDictModule
-from torchrl.envs import TransformedEnv, Compose, StepCounter, RewardScaling
-from torchrl.modules import ProbabilisticActor, TanhNormal, MLP
 from torchrl.collectors import SyncDataCollector
-from torchrl.objectives import ClipPPOLoss
+from torchrl.modules import MLP, ProbabilisticActor, ValueOperator
+from tensordict.nn import TensorDictModule
+from torchrl.objectives.ppo import ClipPPOLoss
 from torchrl.objectives.value import GAE
-from torchrl.data import TensorDictReplayBuffer, LazyTensorStorage
-from torch.optim import Adam
 
-# ==== 你自己的 env loader ====
-from RL.utils.load_rl_env import load_trl_env   # <- 你要把上次写的 load_trl_env 放到这里
 
-def train_ppo(config_file, env_config_file):
-    # === 加载参数 ===
-    with open(config_file, "r") as f:
-        config = yaml.safe_load(f)
-    with open(env_config_file, "r") as f:
-        env_config = yaml.safe_load(f)
+def get_args():
+    import argparse
 
-    device = torch.device(config["env"]["device"])
-    seed = config["env"]["train_seed"]
-    torch.manual_seed(seed)
-
-    # === 构造环境 ===
-    env = load_trl_env(
-        env_config,
-        temp=config["env"]["env_temp"],
-        batch=config["env"]["batch"],
-        seed=seed,
-        device=device,
-        reward_scale=config["env"]["reward_scale"],
-        time_f=config["env"]["time_f"],
+    parser = argparse.ArgumentParser(
+        description="Run PPO training with given policy/env configs"
     )
-    # PPO 常见的 env transform：reward scaling、step 限制
-    env = TransformedEnv(env, Compose(
-        RewardScaling(loc=0.0, scale=1.0),
-        StepCounter(max_steps=200),  # 你可以改成 episode_steps
-    ))
+    parser.add_argument("policy", type=str, help="policy yaml name, e.g. vanilla(.yaml)")
+    parser.add_argument("env", type=str, help="env yaml name, e.g. 0_mm1(.yaml)")
 
-    # === 构造 policy & value 网络 ===
-    # obs_dim = env.observation_spec.shape[0]
+    args = parser.parse_args()
 
-    obs_spec = env.observation_spec
-    if hasattr(obs_spec, "keys"):
-        obs_dim = obs_spec["queues"].shape[-1]
-    else:
-        obs_dim = obs_spec.shape[-1]
+    # 直接在这里处理后缀
+    if not args.policy.endswith(".yaml"):
+        args.policy += ".yaml"
+    if not args.env.endswith(".yaml"):
+        args.env += ".yaml"
 
-    act_dim = env.action_spec.shape[-1]
+    return args
 
-    policy_net = MLP(in_features=obs_dim, out_features=2 * act_dim, num_cells=[64, 64])
-    value_net = MLP(in_features=obs_dim, out_features=1, num_cells=[64, 64])
 
-    # 包装成 TorchRL 模块
-    policy_module = TensorDictModule(
-        policy_net, in_keys=["observation"], out_keys=["loc", "scale"]
+def train_ppo(policy_name: str, env_name: str):
+    # project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # QGymGPU/
+    project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+    # === 自动拼路径 ===
+    policy_yaml_path = os.path.join(project_root,"RL", "policy_configs", policy_name)
+    env_yaml_path = os.path.join(project_root, "configs", "env", env_name)
+
+    # === 加载环境 ===
+    env = load_rl_env(env_yaml_path)
+    eval_env = load_rl_env(env_yaml_path)
+
+    # # === 加载 PPO 策略配置 ===
+    # with open(policy_yaml_path, "r", encoding="utf-8") as f:
+    #     policy_config = yaml.safe_load(f)
+    # device = policy_config['env']['device']
+    # ...
+
+    obs_dim = env.observation_spec.shape[-1]
+    n_actions = env.action_spec.space.n
+
+    device = torch.device("cpu")
+
+    # 2) 策略与价值网络（尽量小）
+    actor_net = MLP(
+        in_features=obs_dim,
+        out_features=n_actions,
+        num_cells=[64, 64],
+        activation_class=nn.Tanh,
     )
-    policy = ProbabilisticActor(
-        module=policy_module,
-        spec=env.action_spec,
-        distribution_class=TanhNormal,
-        in_keys=["loc", "scale"],
-        out_keys=["action"],
-        return_log_prob=True,
-    ).to(device)
-
-    value = TensorDictModule(
-        value_net, in_keys=["observation"], out_keys=["state_value"]
-    ).to(device)
-
-    # # === PPO loss ===
-    # advantage_module = GAE(
-    #     gamma=config["training"].get("gamma", 0.99),
-    #     lmbda=config["training"].get("gae_lambda", 0.95),
-    #     value_network=value,
-    # )
-    # loss_module = ClipPPOLoss(
-    #     actor=policy,
-    #     critic=value,
-    #     advantage_key="advantage",
-    #     value_target_key="value_target",
-    #     clip_epsilon=0.2,
-    # )
-
-    # GAE 构造不变
-    advantage_module = GAE(
-        gamma=float(config["training"].get("gamma", 0.99)),
-        lmbda=float(config["training"].get("gae_lambda", 0.95)),
-        value_network=value,  # 你的 value TDModule，out_keys 里要包含 "state_value"
+    actor_td = TensorDictModule(actor_net, in_keys=["observation"], out_keys=["logits"])
+    actor = ProbabilisticActor(
+        module=actor_td,
+        in_keys=["logits"],
+        dist_class=Categorical,  # 离散分布
+        return_log_prob=True,  # 训练 PPO 需要 log_prob
+        default_interaction_type=None,  # 训练时用 sample
+    )
+    critic = ValueOperator(
+        module=MLP(in_features=obs_dim, out_features=1, num_cells=[64, 64], activation_class=nn.Tanh),
+        in_keys=["observation"],
     )
 
-    # 只有当你的键名与默认不一致时才需要 set_keys
-    # 默认：advantage="advantage", value_target="value_target", value="state_value",
-    #      reward="reward", done="done", terminated="terminated"
-    advantage_module.set_keys(
-        advantage="advantage",
-        value_target="value_target",
-        value="state_value",  # 必须与 value 网络的 out_keys 匹配
-        # reward="reward",
-        # done="done",
-        # terminated="terminated",
-    )
+    actor.to(device)
+    critic.to(device)
 
-    # --- PPO Loss: 先实例化，再 set_keys ---
-    loss_module = ClipPPOLoss(
-        actor=policy,  # 你的 ProbabilisticActor（return_log_prob=True）
-        critic=value,  # 你的 value TDModule
-        clip_epsilon=float(config["training"].get("clip_epsilon", 0.2)),
-        entropy_bonus=True,
-        entropy_coef=float(config["training"].get("ent_coef", 0.01)),
-        critic_coef=float(config["training"].get("vf_coef", 0.5)),
-        normalize_advantage=bool(config["training"].get("normalize_advantage", True)),
-        # value 裁剪：False / True / 浮点
-        clip_value=(float(config["training"]["clip_range_vf"])
-                    if "clip_range_vf" in config["training"] and config["training"]["clip_range_vf"]
-                    else False),
-    )
-
-    # 让 PPO loss 知道各字段的键名
-    loss_module.set_keys(
-        action="action",
-        sample_log_prob="sample_log_prob",
-        value="state_value",
-        value_target="value_target",
-        advantage="advantage",
-        # 如 env 的键名不同，也可以一起对齐：
-        # reward="reward",
-        # done="done",
-        # terminated="terminated",
-    )
-
-    # === Replay buffer ===
-    rb = TensorDictReplayBuffer(
-        storage=LazyTensorStorage(max_size=10000, device=device)
-    )
-
-    # === Collector ===
+    # 3) 收集器（同步采样）
     collector = SyncDataCollector(
         env,
-        policy,
-        frames_per_batch=200,
-        total_frames=2000,
+        policy=actor,
+        frames_per_batch=16,  # 每个 batch 的采样步数（小点儿跑得快）
+        total_frames=16 * 2,  # 总步数（演示足够）
         device=device,
     )
 
-    optim = Adam(loss_module.parameters(), lr=3e-4)
+    # 4) 优化器与 loss/优势估计
+    optim = torch.optim.Adam(list(actor.parameters()) + list(critic.parameters()), lr=3e-4)
+    gae = GAE(value_network=critic, gamma=0.99, lmbda=0.95)
+    ppo_loss = ClipPPOLoss(actor=actor, critic=critic, clip_epsilon=0.2, entropy_coef=0.01)
 
-    # === 训练循环 ===
-    for i, data in enumerate(collector):
-        # data: [batch, time, ...]
-        data = data.to(device)
+    # 5) 训练循环（极简：每个 batch 只做少量 epoch，不做复杂的分片/打乱）
+    epochs_per_batch = 2
 
-        # 计算 advantage
-        advantage_module(data)
+    def evaluate(env, policy, episodes=2):
+        import numpy as np
+        with torch.no_grad():
+            rews = []
+            for _ in range(episodes):
+                td = env.reset()
+                done = False
+                ep_r = 0.0
+                while not done:
+                    td = policy(td)  # 生成 "action"
+                    td = env.step(td)  # 与环境交互
+                    ep_r += float(td["reward"])
+                    done = bool(td.get("done", td.get("terminated", False)))
+                    td = td.get("next")  # 下一个时刻
+                rews.append(ep_r)
+        return np.mean(rews)
 
-        # 存入 buffer
-        rb.extend(data.reshape(-1))
+    print("Start training…")
+    for batch_idx, td in enumerate(collector):
+        # td 形状约为 [T, B] 或 [frames_per_batch]（取决于环境/collector），统一展开成一维
+        # 先做 GAE（会在 td 中写入 "advantage" / "value_target"）
+        td = td.to(device)
+        gae(td)
 
-        # 采样 batch 训练
-        for _ in range(4):  # ppo_epochs
-            subdata = rb.sample(64)
-            loss_vals = loss_module(subdata)
-            loss = loss_vals["loss_objective"] + 0.5 * loss_vals["loss_critic"] - 0.01 * loss_vals["loss_entropy"]
+        # 简单扁平化（时间和批次合并），极简写法
+        flat_td = td.reshape(-1)
 
+        for _ in range(epochs_per_batch):
             optim.zero_grad()
+            loss_vals = ppo_loss(flat_td)
+            loss = loss_vals["loss_objective"] + loss_vals["loss_critic"] + loss_vals["loss_entropy"]
             loss.backward()
             optim.step()
 
-        if i % 10 == 0:
-            print(f"Iter {i}, loss: {loss.item():.4f}")
+        if (batch_idx + 1) % 5 == 0:
+            avg_ret = evaluate(eval_env, actor, episodes=5)
+            print(f"[Batch {batch_idx + 1}] loss={loss.item():.3f}  eval_return={avg_ret:.1f}")
 
-    print("训练完成 ✅")
+    print("Done.")
+
+
+
+
 
 
 if __name__ == "__main__":
-    # 调用方式：
-    # python train_ppo.py PPO.yaml myenv.yaml
-    if len(sys.argv) < 3:
-        print("用法: python RL/PPO/train.py <policy_config.yaml> <env_name>")
-        sys.exit(1)
-
-        # 命令行参数
-    policy_config_name = sys.argv[1]
-    env_config_name = sys.argv[2]
-
-    # 获取项目根目录
-    # project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-    # 拼接 policy config 路径
-    if not policy_config_name.endswith(".yaml"):
-        policy_config_name += ".yaml"
-    print(f'project_root: {project_root}')
-    policy_config_path = os.path.join(project_root, "RL", "policy_configs", policy_config_name)
-
-    # 拼接 env config 路径
-    env_config_path = os.path.join(project_root, "configs", "env", f"{env_config_name}.yaml")
-
-    train_ppo(policy_config_path, env_config_path)
+    args = get_args()
+    train_ppo(args.policy, args.env)

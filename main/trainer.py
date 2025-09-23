@@ -43,7 +43,7 @@ class Trainer:
         dq = BatchedDiffDES(
             self.env_config['network'],
             self.env_config['mu'],
-            self.env_config['h'],
+            torch.tensor(self.env_config['h']).float(),
             queue_event_options=self.env_config.get('queue_event_options', None),
             default_B=B_train,
             temp=self.model_config['env']['env_temp'],
@@ -152,7 +152,7 @@ class Trainer:
         dq = BatchedDiffDES(
             self.env_config['network'],
             self.env_config['mu'],
-            self.env_config['h'],
+            torch.tensor(self.env_config['h']).float(),
             queue_event_options=self.env_config.get('queue_event_options', None),
             default_B=B_test,
             temp=self.model_config['env']['env_temp'],

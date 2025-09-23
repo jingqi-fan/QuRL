@@ -5,7 +5,7 @@ from tensordict import TensorDict, TensorDictBase
 from torchrl.envs import EnvBase
 from torchrl.data import Bounded, Composite, Unbounded
 from typing import Optional
-
+from torchrl.envs.utils import step_mdp
 
 class STargmin(nn.Module):
     def __init__(self, temp: float = 1.0):
@@ -48,8 +48,7 @@ class BatchedDiffDES(EnvBase):
 
         self.network = network.to(self.device).float()  # [S,Q]
         self.mu = mu.to(self.device).float()            # [S,Q]
-        # self.h = h.to(self.device).float()
-        self.h = torch.tensor(h, dtype=torch.float32, device=self.device) # [Q]
+        self.h = h.to(self.device).float()              # [Q]
         self.S, self.Q = self.network.shape
         self.J = int(max_jobs)
         self.default_B = default_B
@@ -303,3 +302,4 @@ class BatchedDiffDES(EnvBase):
             batch_size=bs,
         )
         return out
+        # return step_mdp(out, keep_other=True)
