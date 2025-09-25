@@ -1,156 +1,82 @@
-# trainer_torchrl.py
-import time, math, numpy as np
+# RL/trainers/ppo_trainer.py
 import torch
-import torch.nn as nn
-from torch.optim import Adam
-
+from torch import optim
 from torchrl.collectors import SyncDataCollector
-from torchrl.data import LazyTensorStorage, TensorDictReplayBuffer
-from torchrl.objectives import ClipPPOLoss
+from torchrl.objectives.ppo import ClipPPOLoss
 from torchrl.objectives.value import GAE
+from RL.models.continuous import build_continuous_actor_critic
+from torchrl.envs.utils import ExplorationType, set_exploration_type
 
-from RL.utils.cosine import cosine_lr_schedule  # 你已有cosine lr函数可复用
 
+class PPOTrainerTorchRL:
+    def __init__(self, train_env, eval_env, obs_dim, act_spec, config, device="cpu"):
+        self.device = torch.device(device)
+        self.train_env = train_env
+        self.eval_env  = eval_env
+        self.cfg = config
 
-
-class TorchRLPPOTrainer:
-    def __init__(
-        self,
-        actor,
-        value,
-        env,
-        lr_policy,
-        lr_value,
-        min_lr_policy,
-        min_lr_value,
-        clip_range,
-        ent_coef,
-        vf_coef,
-        gamma,
-        gae_lambda,
-        ppo_epochs,
-        num_epochs,
-        episode_steps,
-        actors,
-        device,
-        target_kl=None,
-        ct=None,
-    ):
-        self.actor = actor
-        self.value = value
-        self.env = env
-        self.device = device
-
-        self.lr_policy = lr_policy
-        self.lr_value = lr_value
-        self.min_lr_policy = min_lr_policy
-        self.min_lr_value = min_lr_value
-        self.clip_range = clip_range
-        self.ent_coef = ent_coef
-        self.vf_coef = vf_coef
-        self.gamma = gamma
-        self.gae_lambda = gae_lambda
-        self.ppo_epochs = ppo_epochs
-        self.num_epochs = num_epochs
-        self.episode_steps = episode_steps
-        self.actors = actors
-        self.target_kl = target_kl
-        self.ct = ct
-
-        # 优化器
-        self.optim_policy = Adam(self.actor.parameters(), lr=lr_policy)
-        self.optim_value = Adam(self.value.parameters(), lr=lr_value)
-
-        # 损失
-        self.advantage = GAE(
-            gamma=gamma,
-            lmbda=gae_lambda,
-            value_network=value,
-            average_gae=True,
+        # actor / critic
+        self.actor, self.critic = build_continuous_actor_critic(
+            obs_dim=obs_dim,
+            action_spec=act_spec,
+            hidden_sizes=self.cfg["hidden_sizes"],
+            in_key="obs",
         )
-        self.loss_module = ClipPPOLoss(
-            actor_network=actor,
-            critic=value,
-            clip_epsilon=clip_range,
-            entropy_coef=ent_coef,
-            critic_coef=vf_coef,
+        self.actor.to(self.device); self.critic.to(self.device)
+
+        # advantage / loss / opt
+        self.adv = GAE(gamma=self.cfg["gamma"], lmbda=self.cfg["gae_lambda"],
+                       value_network=self.critic, average_gae=True)
+        self.loss = ClipPPOLoss(
+            actor_network=self.actor,
+            critic_network=self.critic,
+            clip_epsilon=self.cfg["clip_epsilon"],
+            entropy_coef=self.cfg["ent_coef"],
+            critic_coef=self.cfg["vf_coef"],
             normalize_advantage=True,
-        ).to(device)
+        )
+        self.opt_actor  = optim.Adam(self.actor.parameters(),  lr=self.cfg["lr"])
+        self.opt_critic = optim.Adam(self.critic.parameters(), lr=self.cfg["lr"])
 
-        # 采样器
         self.collector = SyncDataCollector(
-            env,
-            policy=actor,
-            frames_per_batch=episode_steps * actors,
-            total_frames=num_epochs * episode_steps * actors,
-            device=device,
-            storing_device=device,
-            reset_at_each_iter=False,
-            split_trajs=True,
+            self.train_env, self.actor,
+            frames_per_batch=self.cfg["frames_per_batch"],
+            total_frames=self.cfg["total_frames"],
+            device=self.device,
         )
 
-        # buffer
-        storage = LazyTensorStorage(episode_steps * actors, device=device)
-        self.rb = TensorDictReplayBuffer(storage=storage)
+    def train(self):
+        ppo_epochs = self.cfg["ppo_epochs"]
+        minibatch_sz = self.cfg["minibatch_size"]
 
-    def learn(self):
-        global_frames = 0
-        for epoch, tensordict_data in enumerate(self.collector):
-            frames = tensordict_data.numel()
-            global_frames += frames
-
-            # GAE
+        for batch in self.collector:
+            # batch: TensorDict with batch_size = [T, B]  (T=frames_per_batch, B=内部batch)
             with torch.no_grad():
-                tensordict_data = self.advantage(tensordict_data)
-            self.rb.extend(tensordict_data)
+                self.adv(batch)  # 写入 advantage、(可选) value_target 等
 
-            # PPO inner loop
-            for _ in range(self.ppo_epochs):
-                batch = self.rb.sample(len(self.rb))
-                self.loss_module.update_sampled_log_prob(batch)
+            # 展平成单一批维，再打乱
+            td = batch.reshape(-1).shuffle()  # 形状从 [T,B,...] -> [T*B, ...]
 
-                # actor update
-                self.optim_policy.zero_grad()
-                loss_pi = self.loss_module.actor_loss(batch)
-                loss_pi.backward()
-                torch.nn.utils.clip_grad_norm_(self.actor.parameters(), max_norm=1.0)
-                self.optim_policy.step()
+            for _ in range(ppo_epochs):
+                for i in range(0, td.numel(), minibatch_sz):
+                    sub = td[i:i + minibatch_sz]  # [minibatch, ...]
+                    losses = self.loss(sub)  # 需要的键：action / sample_log_prob / advantage / state_value / done / reward
+                    self.opt_actor.zero_grad(set_to_none=True)
+                    self.opt_critic.zero_grad(set_to_none=True)
+                    losses["loss_objective"].backward()
+                    torch.nn.utils.clip_grad_norm_(self.actor.parameters(), 1.0)
+                    torch.nn.utils.clip_grad_norm_(self.critic.parameters(), 1.0)
+                    self.opt_actor.step()
+                    self.opt_critic.step()
 
-                # value update
-                self.optim_value.zero_grad()
-                loss_v = self.loss_module.critic_loss(batch)
-                loss_v.backward()
-                torch.nn.utils.clip_grad_norm_(self.value.parameters(), max_norm=1.0)
-                self.optim_value.step()
-
-                # KL early stop
-                if self.target_kl is not None:
-                    with torch.no_grad():
-                        approx_kl = self.loss_module.approx_kl(batch).mean().item()
-                    if approx_kl > 1.5 * self.target_kl:
-                        print(f"[epoch {epoch}] early stop PPO, KL={approx_kl:.4f}")
-                        break
-
-            self.rb.empty()
-
-            # 余弦学习率
-            progress = 1.0 - (epoch + 1) / float(self.num_epochs)
-            for pg in self.optim_policy.param_groups:
-                pg["lr"] = cosine_lr_schedule(self.lr_policy, self.min_lr_policy, progress)
-            for pg in self.optim_value.param_groups:
-                pg["lr"] = cosine_lr_schedule(self.lr_value, self.min_lr_value, progress)
-
-            # 日志
-            ep_reward = tensordict_data.get(("next", "reward")).mean().item()
-            ep_len = frames / self.actors
-            print(f"[{epoch+1:04d}/{self.num_epochs}] frames={global_frames} | "
-                  f"ep_len≈{ep_len:.0f} | rew={ep_reward:.4f} | "
-                  f"Lpi={loss_pi.item():.4f} | Lv={loss_v.item():.4f} | "
-                  f"lr_pi={self.optim_policy.param_groups[0]['lr']:.2e} "
-                  f"lr_v={self.optim_value.param_groups[0]['lr']:.2e}")
-
-            if epoch + 1 >= self.num_epochs:
-                break
-
-        print("Training finished.")
-        return self.actor, self.value
+    @torch.no_grad()
+    def evaluate(self, n_steps=200):
+        if self.eval_env is None: return
+        with set_exploration_type(ExplorationType.MODE):
+            td = self.eval_env.reset()
+            ret = 0.0
+            for _ in range(n_steps):
+                td = self.actor(td)
+                td = self.eval_env.step(td)
+                ret += float(td.get("reward").mean().cpu())
+            print(f"[eval] avg reward over {n_steps}: {ret / n_steps:.3f}")

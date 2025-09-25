@@ -1,4 +1,5 @@
 # QGymGPU/RL/train.py
+import json
 import os
 import sys
 import time
@@ -8,12 +9,18 @@ import yaml
 import torch
 import torch.nn as nn
 from torchrl.collectors import SyncDataCollector
+from torchrl.envs import SerialEnv
 from torchrl.modules import MLP, ProbabilisticActor, ValueOperator
 from tensordict.nn import TensorDictModule
 from torchrl.objectives.ppo import ClipPPOLoss
 from torchrl.objectives.value import GAE
 
+from RL.PPO.eval import parallel_eval
+from RL.PPO.trainer import PPOTrainerTorchRL
 from RL.env.rl_env import RLViewDiffDES
+from RL.policies.WC_policy import WC_Policy
+from RL.policies.pathwise_policy import Pathwise_Policy
+from RL.policies.vanilla_policy import Vanilla_Policy
 from RL.utils.count_time import count_time
 
 
@@ -47,18 +54,41 @@ def load_rl_env(seed, batch):
         time_f=time_f,
     ).to(device)
 
-    return env
+    act_spec = env.action_spec
+    obs_spec = env.observation_spec
+    obs_dim = obs_spec["obs"].shape[-1]
+
+    return env, act_spec, obs_dim
 
 
 def train_ppo():
     ct = count_time(time.time())
 
-    # === 加载环境 ===
-    train_env = load_rl_env(policy_config["train_seed"], policy_config["train_batch"])
-    eval_env = load_rl_env(policy_config["test_seed"], policy_config["test_batch"])
+    train_env, train_act_spec, train_obs_dim = load_rl_env(train_seed, train_batch)
+    eval_env, eval_act_spec, eval_obs_dim = load_rl_env(test_seed, test_batch)
+
+    # model kwargs
+    L = orig_q
+    J = orig_s
+    gmLJ = int(np.sqrt(L * J))
+    pi_arch = [scale * L, scale * gmLJ, scale * J]
+    vi_arch = [scale * L, scale * gmLJ, scale * J]
+
+    if model_name == 'WC':
+        policy = WC_Policy
+    elif model_name == 'vanilla':
+        policy = Vanilla_Policy
+    elif model_name == 'pathwise':
+        policy = Pathwise_Policy
+    else:
+        raise ValueError
 
 
-
+    trainer = PPOTrainerTorchRL(
+        train_env, eval_env, train_obs_dim, train_act_spec,
+        policy_config, device
+    )
+    trainer.train()
 
 
 if __name__ == "__main__":
@@ -71,14 +101,15 @@ if __name__ == "__main__":
     if not env_file_name.endswith('.yaml'):
         env_file_name += '.yaml'
     policy_file_path = os.path.join(project_root, "RL", 'policy_configs', policy_file_name)
-    env_file_path = os.path.join(project_root, 'configs', 'env', policy_file_name)
-    with open(policy_file_path, 'r') as f:
+    env_file_path = os.path.join(project_root, 'configs', 'env', env_file_name)
+    with open(policy_file_path, 'r', encoding='UTF-8') as f:
         policy_config = yaml.safe_load(f)
     with open(env_file_path, 'r', encoding='UTF-8') as f:
         env_config = yaml.safe_load(f)
 
     env_name = env_config["name"]
     policy_name = policy_config["name"]
+    model_name = policy_config['model']["policy_name"]
 
     if "env_type" in env_config:
         env_type = env_config["env_type"]
@@ -166,6 +197,10 @@ if __name__ == "__main__":
     lr_value = policy_config['training']['lr_value']
     min_lr_policy =policy_config['training']['min_lr_policy']
     min_lr_value = policy_config['training']['min_lr_value']
+    train_seed = policy_config['env']['train_seed']
+    test_seed = policy_config['env']['test_seed']
+    train_batch = policy_config['training']['train_batch']
+    test_batch = policy_config['training']['test_batch']
 
     episode_steps = policy_config['training']['episode_steps']
     gae_lambda = policy_config['training']['gae_lambda']
