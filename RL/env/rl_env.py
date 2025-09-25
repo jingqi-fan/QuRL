@@ -10,6 +10,7 @@ class RLViewDiffDES(BatchedDiffDES):
     def __init__(self, *args, time_f: bool = True, **kwargs):
         self.time_f = time_f
         super().__init__(*args, **kwargs)
+        # super().__init__(batch_size=[default_B])
 
     def _make_spec(self):
         # 先让父类生成 action/reward/done 等 spec
@@ -92,7 +93,7 @@ if __name__ == "__main__":
         max_jobs=4,
         temp=1.0,
         device="cuda",
-        default_B=2,   # batch = 2
+        default_B=5,   # batch = 2
         time_f=False,   # 👈 开关控制是否在 obs 里包含 time
     )
 
@@ -105,6 +106,7 @@ if __name__ == "__main__":
     for i in range(5):
         B = td.batch_size[0]
         action = torch.rand(B, S, Q)
+        print('8')
         # td = env.step(TensorDict({"action": action}, batch_size=[B]))
         # print(f"\n=== Step {i} ===")
         # print("queues:", td["next", "queues"])

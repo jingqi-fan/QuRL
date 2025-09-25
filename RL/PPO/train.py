@@ -7,8 +7,16 @@ import time
 import numpy as np
 import yaml
 import torch
+import torch.nn as nn
+from torchrl.collectors import SyncDataCollector
+from torchrl.envs import SerialEnv
+from torchrl.modules import MLP, ProbabilisticActor, ValueOperator
+from tensordict.nn import TensorDictModule
+from torchrl.objectives.ppo import ClipPPOLoss
+from torchrl.objectives.value import GAE
 
-from RL.PPO.trainer import PPOTrainerTorchRL
+from RL.PPO.eval import parallel_eval
+from RL.PPO.trainer import PPOTrainerTorchRL, PPOArgs
 from RL.env.rl_env import RLViewDiffDES
 from RL.policies.WC_policy import WC_Policy
 from RL.policies.pathwise_policy import Pathwise_Policy
@@ -59,28 +67,57 @@ def train_ppo():
     train_env, train_act_spec, train_obs_dim = load_rl_env(train_seed, train_batch)
     eval_env, eval_act_spec, eval_obs_dim = load_rl_env(test_seed, test_batch)
 
-    # model kwargs
-    L = orig_q
-    J = orig_s
-    gmLJ = int(np.sqrt(L * J))
-    pi_arch = [scale * L, scale * gmLJ, scale * J]
-    vi_arch = [scale * L, scale * gmLJ, scale * J]
-
-    if model_name == 'WC':
-        policy = WC_Policy
-    elif model_name == 'vanilla':
-        policy = Vanilla_Policy
-    elif model_name == 'pathwise':
-        policy = Pathwise_Policy
-    else:
-        raise ValueError
-
-
-    trainer = PPOTrainerTorchRL(
-        train_env, eval_env, train_obs_dim, train_act_spec,
-        policy_config, device
+    # 2) 组装 Trainer 的参数（对齐你原来 SB3 的超参语义）
+    ppo_args = PPOArgs(
+        device=device,
+        obs_dim=int(train_obs_dim),
+        S=int(orig_s),
+        Q=int(orig_q),
+        hidden=int(scale * int(np.sqrt(orig_q * orig_s))),  # 与原来 scale * sqrt(L*J) 对齐
+        # rollout
+        episode_steps=int(episode_steps),
+        train_batch=int(train_batch),
+        test_batch=int(test_batch),
+        # PPO
+        gamma=float(gamma),
+        gae_lambda=float(gae_lambda),
+        clip_eps=0.2,  # 原来 SB3 里固定 0.2
+        ent_coef=float(ent_coef),
+        vf_coef=float(vf_coef),
+        max_grad_norm=1.0,  # 与原来一致
+        ppo_epochs=int(ppo_epochs),
+        minibatch_size=int(ppo_batch_size),  # 原 config['training']['batch_size']
+        target_kl=(None if target_kl in [None, "None"] else float(target_kl)),
+        # LR（分别对 policy / value）
+        lr_policy=float(lr_policy),
+        lr_value=float(lr_value),
+        min_lr_policy=float(min_lr_policy),
+        min_lr_value=float(min_lr_value),
+        warmup=0.03,  # 与之前实现相同的 warmup 比例
+        # 训练轮次
+        total_epochs=int(num_epochs),
+        # 其他
+        normalize_advantage=bool(normalize_advantage),
+        rescale_value=bool(rescale_v),
+        behavior_cloning=bool(bc),
+        bc_samples=1000,  # 与原 parallel_eval.BCD 一致
+        bc_lr=3e-4,  # 与原 BC 优化器一致
+        # 评估
+        eval_every=1,  # 每个 epoch 评估一次（原来每个 episode_steps 调一次）
+        eval_T=int(test_T),
     )
-    trainer.train()
+
+    print(f'network {network}, network dim {network.dim()}, network size {network.size()}, network[0] {network[0]}')
+    trainer = PPOTrainerTorchRL(
+        train_env=train_env,
+        eval_env=eval_env,
+        args=ppo_args,
+        network_mask=network if network.dim() == 2 else network[0],  # [S,Q] or按需处理
+    )
+    # 是否进行行为克隆预训练：由 config 控制（与原流程一致）
+    if bc:
+        trainer.pre_train() # 可选：如果 policy_config['training']['behavior_cloning'] 为 True
+    trainer.learn()
 
 
 if __name__ == "__main__":

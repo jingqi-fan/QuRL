@@ -1,370 +1,432 @@
-# QGymGPU/RL/train.py
-import os
-import sys
+"""
+TorchRL 0.6 — Single-env + batched PPO (policy/value separate optimizers)
+-----------------------------------------------------------------------
+This script shows how to train with one EnvBase instance that internally
+handles parallelism via batch dims (train_batch / test_batch), avoiding
+multi-process vector envs. It keeps the important customizations you had:
+- separate optimizers for policy and value
+- cosine LR with warmup for each
+- optional KL early stop
+- periodic batched evaluation (test_batch)
+
+Integration notes (edit these for your codebase):
+1) Replace `build_env()` with your own factory that returns an EnvBase-compatible
+   environment already set to the desired batch_size. Your env should expose
+   keys: 'obs' (float32, [B, obs_dim]), 'action' ([B, S, Q] one-hot or logits),
+   'reward' ([B, 1] or [B]), 'done' ([B, 1] or [B]). If your env returns a
+   different layout, adapt the `select_action()` and `env_step()` parts.
+2) If you have action masks / network feasibility like before, wire the mask in
+   `MaskedMultiCategorical` (below) before sampling.
+3) If your observation optionally concatenates time, set OBS_HAS_TIME = True.
+
+Tested with: torch>=2.2, torchrl==0.6.*
+"""
+from __future__ import annotations
+
+import math
 import time
+from dataclasses import dataclass
+from typing import Optional, Tuple
 
-import numpy as np
-import yaml
 import torch
-from torch import nn, optim
+import torch.nn as nn
+import torch.nn.functional as F
+from tensordict import TensorDict
+from torch.distributions import Categorical
+
+# TorchRL 0.6
+# import TensorDict
 from torchrl.collectors import SyncDataCollector
-from torchrl.modules import MLP, ProbabilisticActor, ValueOperator
-from tensordict.nn import TensorDictModule
-from torchrl.objectives.ppo import ClipPPOLoss
-from torchrl.objectives.value import GAE
-# ===== 简化版：不做异常兜底，直接从 spec 读取 =====
-from torchrl.data.tensor_specs import DiscreteTensorSpec
-from RL.env.rl_env import RLViewDiffDES
-from RL.policies.WC_policy import WC_Policy
-from RL.policies.vanilla_policy import Vanilla_Policy
-from RL.utils.count_time import count_time
-from torch.distributions import Normal, Categorical
+from torchrl.envs import EnvBase
+
+# ------------------------------
+# Config
+# ------------------------------
+@dataclass
+class PPOConfig:
+    device: str = "cuda" if torch.cuda.is_available() else "cpu"
+
+    # env & batching
+    train_batch: int = 64          # internal parallel rollouts
+    test_batch: int = 64
+    episode_steps: int = 1024      # rollout horizon per batch element
+
+    # model
+    obs_dim: int = 64              # <-- set at runtime after probing env
+    S: int = 8                     # number of servers (actions per row)
+    Q: int = 16                    # number of queues (classes per server)
+    hidden: int = 256
+    scale: int = 1                 # keep parity with your previous code
+    rescale_value: bool = True
+
+    # PPO
+    gamma: float = 0.99
+    gae_lambda: float = 0.95
+    clip_eps: float = 0.2
+    ent_coef: float = 0.0
+    vf_coef: float = 0.5
+    max_grad_norm: float = 1.0
+    ppo_epochs: int = 4
+    minibatch_size: int = 1024     # samples per minibatch (B * T slices)
+    target_kl: Optional[float] = None  # e.g. 0.02
+
+    # LR (separate)
+    lr_policy: float = 3e-4
+    lr_value: float = 3e-4
+    min_lr_policy: float = 1e-5
+    min_lr_value: float = 1e-5
+    warmup: float = 0.03           # proportion of total updates
+
+    # training length
+    total_epochs: int = 200        # number of collector -> update cycles
+
+    # eval
+    eval_every: int = 1
+    eval_T: int = 1024
+
+    # misc
+    seed: int = 0
 
 
-def load_rl_env(seed, batch):
-    # ---- 抽样器（回到 torch 张量） ----
-    def draw_service(env, t: torch.Tensor) -> torch.Tensor:
-        B = t.shape[0]
-        rate = torch.ones(B, orig_q, device=env.device)
-        return torch.distributions.Exponential(rate=rate).sample()
-
-    def draw_inter_arrivals(env, t: torch.Tensor) -> torch.Tensor:
-        with torch.no_grad():
-            t_now = float(t[0, 0].item()) if t.numel() > 0 else 0.0
-            lam_vec = np.array(lam(t_now), dtype=np.float32)
-            lam_vec = np.maximum(lam_vec, 1e-8)
-        lam_t = torch.as_tensor(lam_vec, device=env.device).view(1, orig_q).expand(t.size(0), orig_q)
-        return torch.distributions.Exponential(rate=lam_t).sample()
-
-    # ---- 构造环境 ----
-    env = RLViewDiffDES(
-        network=network,
-        mu=mu,
-        h=h,
-        draw_service=draw_service,
-        draw_inter_arrivals=draw_inter_arrivals,
-        temp=env_temp,
-        device=device,
-        seed=seed,
-        default_B=batch,
-        queue_event_options=queue_event_options,
-        time_f=time_f,
-    ).to(device)
-
-    return env
+# ------------------------------
+# Utilities
+# ------------------------------
+def set_seed(seed: int):
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
 
 
-def train_ppo():
-    ct = count_time(time.time())
-
-    # ======== 可根据你的环境改的常量（键名） ========
-    OBS_KEY = "obs"  # 你的 env 若输出 "obs"，这里改成 "obs"
-    ACTION_KEY = "action"
-    REWARD_KEY = "reward"
-    DONE_KEY = "done"
-
-    # === 加载环境 ===
-    env = load_rl_env(policy_config['env']["train_seed"], policy_config['training']["train_batch"])
-
-    obs_spec = env.observation_spec
-    act_spec = env.action_spec
-    # 观测维度：优先用单一张量的 shape，否则当作 CompositeSpec 用 OBS_KEY 取子规格
-    if hasattr(obs_spec, "shape") and obs_spec.shape is not None and len(obs_spec.shape) > 0:
-        obs_dim = int(obs_spec.shape[-1])
-    else:
-        obs_dim = int(obs_spec[OBS_KEY].shape[-1])
-
-    # 动作：离散用 n，连续用最后一维
-    is_discrete = isinstance(act_spec, DiscreteTensorSpec)
-    action_dim = int(act_spec.n) if is_discrete else int(act_spec.shape[-1])
-    # 采样/更新规模
-    frames_per_batch = 4  # 每次收集的步数
-    minibatch_size = 4  # PPO 小批
-    ppo_epochs = 1  # 每次更新轮数
-    total_frames = 20 # 总步数
-
-    # PPO/GAE
-    gamma = 0.99
-    gae_lambda = 0.95
-    clip_epsilon = 0.2
-    entropy_coef = 0.0
-    critic_coef = 0.5
-    lr = 3e-4
-    hidden_sizes = [16, 16]
+def cosine_with_warmup(initial_lr: float, min_lr: float, warmup: float, progress: float) -> float:
+    """progress: 0->1 across the entire training (updates)."""
+    progress = max(0.0, min(1.0, progress))
+    if progress < warmup:
+        # linear warmup from min_lr to initial_lr
+        w = progress / max(1e-12, warmup)
+        return min_lr + (initial_lr - min_lr) * w
+    # cosine decay from initial_lr to min_lr
+    t = (progress - warmup) / max(1e-12, (1 - warmup))
+    cos_decay = 0.5 * (1 + math.cos(math.pi * t))
+    return min_lr + (initial_lr - min_lr) * cos_decay
 
 
-    # # Actor: 对离散/连续分别输出 logits 或 (loc, scale)
-    # if is_discrete:
-    #     # 离散：输出 logits
-    #     actor_net = MLP(
-    #         in_features=obs_dim, out_features=action_dim,
-    #         depth=len(hidden_sizes), num_cells=hidden_sizes, activation_class=nn.Tanh
-    #     )
-    #     actor_td = TensorDictModule(
-    #         actor_net, in_keys=[OBS_KEY], out_keys=["logits"]
-    #     )
-    #     actor = ProbabilisticActor(
-    #         module=actor_td,
-    #         in_keys=["logits"],
-    #         spec=env.action_spec,
-    #         distribution_class=Categorical,
-    #         return_log_prob=True,
-    #         default_interaction_mode="random",  # "random" 训练时采样
-    #     ).to(device)
-    # else:
-    # 连续：输出 (loc, scale)
-    # out = 2 * action_dim (前 action_dim 为均值，后 action_dim 经过 softplus 变 scale)
-    actor_net = MLP(
-        in_features=obs_dim, out_features=2 * action_dim,
-        depth=len(hidden_sizes), num_cells=hidden_sizes, activation_class=nn.Tanh
-    )
+# ------------------------------
+# Action distribution: S independent masked Categoricals over Q
+# ------------------------------
+class MaskedMultiCategorical:
+    """Per-server categorical with masking.
+    logits: [B, S, Q]
+    mask:   [B, S, Q] with 1 for valid, 0 for invalid (or None)
+    Returns one-hot actions: [B, S, Q] and log_prob per batch element: [B]
+    """
+    def __init__(self, logits: torch.Tensor, mask: Optional[torch.Tensor] = None):
+        if mask is not None:
+            # set invalid logits to -inf to zero their prob
+            logits = logits.masked_fill(mask <= 0, float("-inf"))
+        self.logits = logits
+        self.S = logits.shape[1]
+        self.Q = logits.shape[2]
+        # split across servers
+        self._cats = [Categorical(logits=logits[:, s, :]) for s in range(self.S)]
 
-    class _SplitLocScale(nn.Module):
-        def __init__(self, action_dim):
-            super().__init__()
-            self.action_dim = action_dim
-            self.softplus = nn.Softplus()
+    def sample_one_hot(self) -> Tuple[torch.Tensor, torch.Tensor]:
+        idxs = [cat.sample() for cat in self._cats]              # list of [B]
+        logps = [cat.log_prob(i) for cat, i in zip(self._cats, idxs)]  # list of [B]
+        # stack back to one-hot
+        B = idxs[0].shape[0]
+        Q = self.Q
+        oh = torch.zeros(B, self.S, Q, device=idxs[0].device)
+        for s, i in enumerate(idxs):
+            oh[torch.arange(B), s, i] = 1.0
+        logp = torch.stack(logps, dim=0).sum(dim=0)  # sum over servers -> [B]
+        return oh, logp
 
-        def forward(self, td):
-            x = td.get(OBS_KEY)
-            out = actor_net(x)
-            loc, raw_scale = out[..., :self.action_dim], out[..., self.action_dim:]
-            scale = self.softplus(raw_scale) + 1e-5
-            td.set("loc", loc)
-            td.set("scale", scale)
-            return td
+    def log_prob_of(self, one_hot: torch.Tensor) -> torch.Tensor:
+        # one_hot: [B, S, Q]
+        idxs = one_hot.argmax(dim=-1)  # [B, S]
+        logps = [cat.log_prob(idxs[:, s]) for s, cat in enumerate(self._cats)]
+        return torch.stack(logps, dim=0).sum(dim=0)  # [B]
 
-    actor_td = TensorDictModule(
-        _SplitLocScale(action_dim), in_keys=[OBS_KEY], out_keys=["loc", "scale"]
-    )
-    actor = ProbabilisticActor(
-        module=actor_td,
-        in_keys=["loc", "scale"],
-        spec=env.action_spec if hasattr(env, "action_spec") else None,
-        distribution_class=Normal,
-        distribution_kwargs={"validate_args": False},
-        return_log_prob=True,
-        default_interaction_mode="random",
-    ).to(device)
 
-    # Critic: 值函数
-    critic_net = MLP(
-        in_features=obs_dim, out_features=1,
-        depth=len(hidden_sizes), num_cells=hidden_sizes, activation_class=nn.Tanh
-    )
-    critic = ValueOperator(
-        module=critic_net,
-        in_keys=[OBS_KEY],
-    ).to(device)
+# ------------------------------
+# Policy / Value Networks
+# ------------------------------
+class MLP(nn.Module):
+    def __init__(self, inp: int, hidden: int, out: int):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(inp, hidden), nn.Tanh(),
+            nn.Linear(hidden, hidden), nn.Tanh(),
+            nn.Linear(hidden, out),
+        )
+    def forward(self, x):
+        return self.net(x)
 
-    # ======== 数据收集器 ========
+
+class ActorCritic(nn.Module):
+    def __init__(self, obs_dim: int, S: int, Q: int, hidden: int):
+        super().__init__()
+        self.S, self.Q = S, Q
+        self.pi = MLP(obs_dim, hidden, S * Q)  # logits
+        self.v  = MLP(obs_dim, hidden, 1)
+
+    def forward(self, obs: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        # obs: [B, obs_dim]
+        logits = self.pi(obs).view(obs.shape[0], self.S, self.Q)
+        value  = self.v(obs).squeeze(-1)  # [B]
+        return logits, value
+
+
+# ------------------------------
+# GAE
+# ------------------------------
+@torch.no_grad()
+def compute_gae(reward, done, value, next_value, gamma, lam):
+    """All shapes are [T, B]. Returns advantage [T,B] and returns [T,B]."""
+    T, B = reward.shape
+    adv = torch.zeros(T, B, device=reward.device)
+    last_gae = torch.zeros(B, device=reward.device)
+    for t in reversed(range(T)):
+        mask = 1.0 - done[t]
+        delta = reward[t] + gamma * next_value[t] * mask - value[t]
+        last_gae = delta + gamma * lam * mask * last_gae
+        adv[t] = last_gae
+    ret = adv + value
+    return adv, ret
+
+
+# ------------------------------
+# Env factory placeholder — EDIT THIS to hook your env
+# ------------------------------
+class DummyBatchedEnv(EnvBase):
+    """Example placeholder to make this script runnable.
+    Replace with your EnvBase (already batched) implementation.
+    Observations: [B, obs_dim]; Action: one-hot [B, S, Q]
+    """
+    def __init__(self, batch_size: int, obs_dim: int, S: int, Q: int, device: str):
+        super().__init__(device=device)
+        self.batch_size = batch_size
+        self.obs_dim, self.S, self.Q = obs_dim, S, Q
+        self.register_buffer("state", torch.zeros(batch_size, obs_dim))
+
+    def reset(self, tensordict: Optional[TensorDict] = None) -> TensorDict:
+        self.state = torch.randn(self.batch_size, self.obs_dim, device=self.device)
+        td = TensorDict({
+            "obs": self.state.clone(),
+            "done": torch.zeros(self.batch_size, 1, device=self.device),
+        }, batch_size=[self.batch_size])
+        return td
+
+    def step(self, tensordict: TensorDict) -> TensorDict:
+        action = tensordict["action"].to(self.device)  # [B,S,Q] one-hot
+        # toy dynamics / reward
+        act_idx = action.argmax(dim=-1).float()  # [B,S]
+        rew = act_idx.mean(dim=1, keepdim=True) / max(1, self.Q-1)
+        self.state = torch.tanh(self.state + 0.01 * torch.randn_like(self.state) + 0.1)
+        done = torch.zeros(self.batch_size, 1, device=self.device)
+        out = TensorDict({
+            "obs": self.state.clone(),
+            "reward": rew,
+            "done": done,
+        }, batch_size=[self.batch_size])
+        return out
+
+
+def build_env(batch_size: int, cfg: PPOConfig, device: str) -> EnvBase:
+    # TODO: replace DummyBatchedEnv with your RLViewDiffDES / EnvBase
+    return DummyBatchedEnv(batch_size=batch_size, obs_dim=cfg.obs_dim, S=cfg.S, Q=cfg.Q, device=device)
+
+
+# ------------------------------
+# Training loop
+# ------------------------------
+@torch.no_grad()
+def evaluate(env: EnvBase, policy: ActorCritic, cfg: PPOConfig) -> Tuple[float, float]:
+    td = env.reset()
+    B = td.batch_size[0]
+    total_r = torch.zeros(B, device=cfg.device)
+    for _ in range(cfg.eval_T):
+        logits, v = policy(td["obs"].to(cfg.device))
+        dist = MaskedMultiCategorical(logits, mask=None)
+        act, _ = dist.sample_one_hot()
+        td = env.step(TensorDict({"action": act.to(env.device)}, batch_size=td.batch_size))
+        r = td.get("reward").view(B).to(cfg.device)
+        total_r += r
+    return total_r.mean().item(), total_r.std(unbiased=True).item()
+
+
+def train(cfg: PPOConfig):
+    set_seed(cfg.seed)
+    device = torch.device(cfg.device)
+
+    # Envs
+    train_env = build_env(cfg.train_batch, cfg, cfg.device)
+    test_env  = build_env(cfg.test_batch, cfg, cfg.device)
+
+    # Probe obs_dim if needed (uncomment if your env provides it dynamically)
+    # cfg.obs_dim = int(train_env.reset()["obs"].shape[-1])
+
+    # Model
+    policy = ActorCritic(cfg.obs_dim, cfg.S, cfg.Q, cfg.hidden).to(device)
+
+    # Opts
+    opt_pi = torch.optim.Adam([
+        *policy.pi.parameters()
+    ], lr=cfg.lr_policy)
+    opt_v  = torch.optim.Adam([
+        *policy.v.parameters()
+    ], lr=cfg.lr_value)
+
+    # Collector: one env, batched frames
+    frames_per_batch = cfg.episode_steps * cfg.train_batch
     collector = SyncDataCollector(
-        env,
-        actor,
+        create_env_fn=lambda: train_env,  # single env instance with batch
         frames_per_batch=frames_per_batch,
-        total_frames=total_frames,
-        device=device,
+        total_frames=-1,                 # we drive by epochs below
+        device=cfg.device,
     )
 
-    # ======== GAE + PPO 损失 ========
-    advantage = GAE(
-        gamma=gamma,
-        lmbda=gae_lambda,
-        value_network=critic,
-        average_gae=True,
-    )
+    # global counters for schedulers
+    total_updates = cfg.total_epochs * cfg.ppo_epochs * max(1, (frames_per_batch // cfg.minibatch_size))
+    update_idx = 0
 
-    loss_module = ClipPPOLoss(
-        actor_network=actor,
-        critic_network=critic,
-        clip_epsilon=clip_epsilon,
-        entropy_coef=entropy_coef,
-        critic_coef=critic_coef,
-        normalize_advantage=True,  # 简洁稳妥
-    )
+    for epoch, td_batch in enumerate(collector):
+        policy.train()
+        # td_batch includes [T*B] frames interleaved; unfold to [T, B, ...]
+        # SyncDataCollector returns keys: 'obs', 'action', 'next', 'reward', 'done', 'terminated' ...
+        # We will recompute everything with our policy (on-policy), so we rebuild storage.
 
-    optim_actor = optim.Adam(actor.parameters(), lr=lr)
-    optim_critic = optim.Adam(critic.parameters(), lr=lr)
+        # Rollout with our policy to build trajectory tensors of shape [T, B]
+        T = cfg.episode_steps
+        B = cfg.train_batch
+        obs = torch.zeros(T + 1, B, cfg.obs_dim, device=device)
+        act_oh = torch.zeros(T, B, cfg.S, cfg.Q, device=device)
+        logp = torch.zeros(T, B, device=device)
+        rew = torch.zeros(T, B, device=device)
+        done = torch.zeros(T, B, device=device)
+        val = torch.zeros(T + 1, B, device=device)
 
-    # ======== 训练循环（极简） ========
-    log_interval = 10
-    frame_count = 0
-    iter_idx = 0
+        td = train_env.reset()
+        obs[0] = td["obs"].to(device)
+        for t in range(T):
+            logits, v = policy(obs[t])
+            dist = MaskedMultiCategorical(logits, mask=None)  # TODO: pass mask from env if you have one
+            a, lp = dist.sample_one_hot()
+            val[t] = v
+            act_oh[t] = a
+            logp[t] = lp
 
-    for tensordict_data in collector:
-        iter_idx += 1
-        frame_count += tensordict_data.numel()
+            td = train_env.step(TensorDict({"action": a.to(train_env.device)}, batch_size=[B]))
+            rew[t] = td["reward"].view(B).to(device)
+            done[t] = td["done"].view(B).to(device)
+            obs[t + 1] = td["obs"].to(device)
 
-        # 计算 advantage / returns
+        # bootstrap value for last obs
         with torch.no_grad():
-            advantage(tensordict_data)
+            _, v_last = policy(obs[-1])
+            val[-1] = v_last
 
-        # 做个简单的随机打乱，切成 minibatch
-        td = tensordict_data.shuffle()
+        # Compute advantages/returns (GAE)
+        adv, ret = compute_gae(
+            reward=rew,
+            done=done,
+            value=val[:-1],
+            next_value=val[1:],
+            gamma=cfg.gamma,
+            lam=cfg.gae_lambda,
+        )
+        # normalize advantage (optional but common)
+        adv = (adv - adv.mean()) / (adv.std(unbiased=False) + 1e-8)
 
-        for _ in range(ppo_epochs):
-            for i in range(0, td.numel(), minibatch_size):
-                sub = td[i: i + minibatch_size]
+        # Flatten time & batch for SGD
+        TnB = T * B
+        obs_f   = obs[:-1].reshape(TnB, cfg.obs_dim)
+        act_f   = act_oh.reshape(TnB, cfg.S, cfg.Q)
+        logp_f  = logp.reshape(TnB)
+        adv_f   = adv.reshape(TnB)
+        ret_f   = ret.reshape(TnB)
+        val_f   = val[:-1].reshape(TnB)
 
-                loss_vals = loss_module(sub)
+        # PPO updates
+        idx = torch.randperm(TnB, device=device)
+        mb = cfg.minibatch_size
+        approx_kl_running = 0.0
 
-                # 先清零
-                optim_actor.zero_grad(set_to_none=True)
-                optim_critic.zero_grad(set_to_none=True)
+        for _ in range(cfg.ppo_epochs):
+            for start in range(0, TnB, mb):
+                end = min(start + mb, TnB)
+                mb_idx = idx[start:end]
 
-                # 总损失 = policy + critic - entropy（已经在 ClipPPOLoss 内组合）
-                loss_vals["loss_objective"].backward()
-                # 简单裁剪，防止梯度爆炸
-                torch.nn.utils.clip_grad_norm_(actor.parameters(), max_norm=0.5)
-                torch.nn.utils.clip_grad_norm_(critic.parameters(), max_norm=0.5)
+                o = obs_f[mb_idx]
+                a = act_f[mb_idx]
+                old_logp = logp_f[mb_idx]
+                adv_mb = adv_f[mb_idx]
+                ret_mb = ret_f[mb_idx]
 
-                optim_actor.step()
-                optim_critic.step()
+                # forward
+                logits, v_pred = policy(o)
+                dist_new = MaskedMultiCategorical(logits, mask=None)
+                new_logp = dist_new.log_prob_of(a)
 
-        # 简单日志
-        if iter_idx % log_interval == 0:
-            # 近似打印回报（平均 reward）
-            ep_reward = float(td.get(REWARD_KEY).mean().cpu())
-            approx_kl = float(loss_vals.get("approx_kl", torch.tensor(0.)).mean().cpu())
-            ent = float(loss_vals.get("entropy", torch.tensor(0.)).mean().cpu())
-            vf = float(loss_vals.get("loss_critic", torch.tensor(0.)).mean().cpu())
-            print(
-                f"[iter {iter_idx:04d}] frames={frame_count} "
-                f"reward~{ep_reward:.2f} kl~{approx_kl:.4f} "
-                f"ent~{ent:.3f} vloss~{vf:.3f}"
-            )
+                # policy loss (clipped surrogate)
+                ratio = torch.exp(new_logp - old_logp)
+                surr1 = ratio * adv_mb
+                surr2 = torch.clamp(ratio, 1 - cfg.clip_eps, 1 + cfg.clip_eps) * adv_mb
+                policy_loss = -torch.min(surr1, surr2).mean()
 
-    print("Training done.")
+                # entropy bonus (optional)
+                # We can estimate entropy by sampling or using categorical entropy per server
+                ent = 0.0
+                if cfg.ent_coef != 0.0:
+                    ent_per_s = []
+                    for s in range(cfg.S):
+                        ent_per_s.append(Categorical(logits=logits[:, s, :]).entropy())
+                    ent = torch.stack(ent_per_s, dim=0).sum(dim=0).mean()
+                policy_obj = policy_loss - cfg.ent_coef * (ent if isinstance(ent, torch.Tensor) else 0.0)
 
+                # value loss
+                value_loss = F.mse_loss(v_pred, ret_mb)
+                value_obj = cfg.vf_coef * value_loss
+
+                # KL for early stop (estimate)
+                with torch.no_grad():
+                    kl = (old_logp - new_logp).mean().clamp_min(0).item()
+                    approx_kl_running = 0.9 * approx_kl_running + 0.1 * kl
+
+                # update separate
+                opt_pi.zero_grad(set_to_none=True)
+                policy_obj.backward(retain_graph=True)
+                nn.utils.clip_grad_norm_(policy.parameters(), cfg.max_grad_norm)
+                opt_pi.step()
+
+                opt_v.zero_grad(set_to_none=True)
+                value_obj.backward()
+                nn.utils.clip_grad_norm_(policy.parameters(), cfg.max_grad_norm)
+                opt_v.step()
+
+                # cosine LR with warmup per update
+                progress = update_idx / max(1, total_updates - 1)
+                for pg in opt_pi.param_groups:
+                    pg["lr"] = cosine_with_warmup(cfg.lr_policy, cfg.min_lr_policy, cfg.warmup, progress)
+                for pg in opt_v.param_groups:
+                    pg["lr"] = cosine_with_warmup(cfg.lr_value, cfg.min_lr_value, cfg.warmup, progress)
+                update_idx += 1
+
+                # KL early stop
+                if cfg.target_kl is not None and approx_kl_running > 1.5 * cfg.target_kl:
+                    break
+            if cfg.target_kl is not None and approx_kl_running > 1.5 * cfg.target_kl:
+                break
+
+        # Eval
+        if (epoch + 1) % cfg.eval_every == 0:
+            policy.eval()
+            mean_r, std_r = evaluate(test_env, policy, cfg)
+            print(f"Epoch {epoch+1:04d} | Return mean {mean_r:.4f} ± {std_r:.4f} | KL~{approx_kl_running:.5f}")
+
+        if epoch + 1 >= cfg.total_epochs:
+            break
 
 
 if __name__ == "__main__":
-    project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # 输出为 QGymGPU 项目目录
-    policy_file_name = sys.argv[1]
-    env_file_name = sys.argv[2]
-    print(f'Policy file: {policy_file_name}, Env file: {env_file_name}')
-    if not policy_file_name.endswith('.yaml'):
-        policy_file_name += '.yaml'
-    if not env_file_name.endswith('.yaml'):
-        env_file_name += '.yaml'
-    policy_file_path = os.path.join(project_root, "RL", 'policy_configs', policy_file_name)
-    env_file_path = os.path.join(project_root, 'configs', 'env', env_file_name)
-    with open(policy_file_path, 'r') as f:
-        policy_config = yaml.safe_load(f)
-    with open(env_file_path, 'r', encoding='UTF-8') as f:
-        env_config = yaml.safe_load(f)
-
-    env_name = env_config["name"]
-    policy_name = policy_config["name"]
-
-    if "env_type" in env_config:
-        env_type = env_config["env_type"]
-    else:
-        env_type = env_name
-
-    # 从 env 中读取
-    if env_config["network"] is None:
-        network_path = os.path.join(
-            project_root, "configs", "env_data", env_type, f"{env_type}_network.npy"
-        )
-        env_config["network"] = np.load(network_path)
-    env_config["network"] = torch.tensor(env_config["network"]).float()
-
-    if env_config["mu"] is None:
-        mu_path = os.path.join(
-            project_root, "configs", "env_data", env_type, f"{env_type}_mu.npy"
-        )
-        env_config["mu"] = np.load(mu_path)
-    env_config["mu"] = torch.tensor(env_config["mu"]).float()
-
-    orig_s, orig_q = env_config["network"].size()
-    network = env_config["network"].repeat_interleave(1, dim=0)
-    mu = env_config["mu"].repeat_interleave(1, dim=0)
-
-    lam_type = env_config["lam_type"]
-    lam_params = env_config["lam_params"]
-    h = torch.tensor(env_config["h"]).float()
-
-    queue_event_options = env_config["queue_event_options"]
-    if queue_event_options is not None:
-        if queue_event_options == "custom":
-            queue_event_options_path = os.path.join(
-                project_root, "configs", "env_data", env_type, f"{env_type}_delta.npy"
-            )
-            queue_event_options = torch.tensor(np.load(queue_event_options_path))
-        else:
-            queue_event_options = torch.tensor(queue_event_options)
-
-    if lam_params["val"] is None:
-        lam_r_path = os.path.join(
-            project_root, "configs", "env_data", env_type, f"{env_type}_lam.npy"
-        )
-        lam_r = np.load(lam_r_path)
-    else:
-        lam_r = lam_params["val"]
-
-
-    def lam(t):
-        if lam_type == "constant":
-            lam = lam_r
-        elif lam_type == "step":
-            is_surge = 1 * (t.data.cpu().numpy() <= lam_params["t_step"])
-            lam = is_surge * np.array(lam_params["val1"]) + (1 - is_surge) * np.array(
-                lam_params["val2"]
-            )
-        else:
-            return "Nonvalid arrival rate"
-        return lam
-
-    # env hyperparameters
-    device = policy_config['env']['device']
-    print(f'device: {device}')
-
-    env_temp = policy_config['env']['env_temp']
-    randomize = policy_config['env']['randomize']
-    time_f = policy_config['env']['time_f']
-
-    # training hyperparameters
-    actors = policy_config['training']['actors']
-    normalize_advantage = policy_config['training']['normalize_advantage']
-    normalize_value = policy_config['training']['normalize_value']
-    normalize_reward = policy_config['training']['normalize_reward']
-    rescale_v = policy_config['training']['rescale_v']
-    truncation = policy_config['training']['truncation']
-    num_epochs = policy_config['training']['num_epochs']
-    amp_value = policy_config['training']['amp_value']
-    var_scaler = policy_config['training']['var_scaler']
-    per_iter_normal_obs = policy_config['training']['per_iter_normal_obs']
-    per_iter_normal_value = policy_config['training']['per_iter_normal_value']
-
-    # learning rates:
-    lr = policy_config['training']['lr']
-    lr_policy = policy_config['training']['lr_policy']
-    lr_value = policy_config['training']['lr_value']
-    min_lr_policy =policy_config['training']['min_lr_policy']
-    min_lr_value = policy_config['training']['min_lr_value']
-
-    episode_steps = policy_config['training']['episode_steps']
-    gae_lambda = policy_config['training']['gae_lambda']
-    gamma = policy_config['training']['gamma']
-    target_kl = policy_config['training']['target_kl']
-    vf_coef = policy_config['training']['vf_coef']
-    ppo_batch_size = policy_config['training']['batch_size']
-    ppo_epochs = policy_config['training']['ppo_epochs']
-    clip_range_vf = policy_config['training']['clip_range_vf']
-    ent_coef = policy_config['training']['ent_coef']
-    bc = policy_config['training']['behavior_cloning']
-
-    # model hyperparameters:
-    scale = policy_config['model']['scale']
-    # policy hyperparameters
-    test_policy = policy_config['policy']['test_policy']
-    # total steps
-    total_steps = num_epochs * episode_steps * actors
-    eval_freq = episode_steps
-    test_T = env_config['test_T']
-
-
-
-    train_ppo()
-
+    cfg = PPOConfig()
+    train(cfg)

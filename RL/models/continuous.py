@@ -9,25 +9,27 @@ from torchrl.data.tensor_specs import DiscreteTensorSpec  # 仅用于断言/提�
 
 
 class _SplitLocScale(nn.Module):
-    """将 backbone 输出的向量切分为 loc/scale，并 reshape 回 action_shape。"""
+    """backbone(x) -> (loc, scale)，loc/scale 形状与 action_shape 一致。"""
     def __init__(self, backbone: nn.Module, action_shape):
         super().__init__()
         self.backbone = backbone
         self.action_shape = tuple(action_shape)
         self.flat_dim = int(np.prod(self.action_shape))
         self.softplus = nn.Softplus()
-    def forward(self, td):
-        x = td.get("obs")
+
+    def forward(self, x: torch.Tensor):
+        # x: (..., obs_dim)
         out = self.backbone(x)  # (..., 2*flat_dim)
-        loc, raw = out[..., :self.flat_dim], out[..., self.flat_dim:]
-        loc   = loc.view(*loc.shape[:-1], *self.action_shape)
-        scale = self.softplus(raw).view(*raw.shape[:-1], *self.action_shape) + 1e-5
-        td.set("loc", loc); td.set("scale", scale)
-        return td
+        loc_flat, raw_flat = out[..., :self.flat_dim], out[..., self.flat_dim:]
+        loc   = loc_flat.view(*loc_flat.shape[:-1], *self.action_shape)
+        scale = self.softplus(raw_flat).view(*raw_flat.shape[:-1], *self.action_shape) + 1e-5
+        # 返回张量序列/元组，TensorDictModule 会按 out_keys 写入
+        return loc, scale
+
 
 def build_continuous_actor_critic(
     obs_dim: int,
-    action_spec,                 # torchrl spec，连续：Bounded(...)
+    action_spec,                 # torchrl 连续动作 spec：Bounded(...)
     hidden_sizes=(64, 64),
     in_key="obs",
     activation=nn.Tanh,
@@ -37,28 +39,29 @@ def build_continuous_actor_critic(
     act_shape = tuple(action_spec.shape)
     flat_dim = int(np.prod(act_shape))
 
-    # Actor backbone：输出 2*flat_dim（loc+scale）
+    # === Actor ===
     actor_backbone = MLP(
         in_features=obs_dim,
-        out_features=2 * flat_dim,
+        out_features=2 * flat_dim,            # 输出 loc + scale
         depth=len(hidden_sizes),
         num_cells=hidden_sizes,
         activation_class=activation,
     )
     split = _SplitLocScale(actor_backbone, act_shape)
 
+    # 注意：in_keys=['obs'] => forward 接收 obs 张量；out_keys 写回到 TD
     actor_td = TensorDictModule(split, in_keys=[in_key], out_keys=["loc", "scale"])
     actor = ProbabilisticActor(
         module=actor_td,
-        in_keys=["loc", "scale"],
+        in_keys=["loc", "scale"],             # 从 TD 取出分布参数
         spec=action_spec,
-        distribution_class=Normal,
+        distribution_class=Normal,            # 按需可用 Independent(Normal, 1)，但 ProbabilisticActor 会处理
         distribution_kwargs={"validate_args": False},
-        return_log_prob=True,
-        # default_interaction_mode="random",
+        return_log_prob=True,                 # 需要 sample_log_prob 给 PPO
+        # default_interaction_mode="random",  # 由 ExplorationType 控制
     )
 
-    # Critic
+    # === Critic ===
     critic_backbone = MLP(
         in_features=obs_dim,
         out_features=1,
@@ -66,6 +69,6 @@ def build_continuous_actor_critic(
         num_cells=hidden_sizes,
         activation_class=activation,
     )
-    critic = ValueOperator(module=critic_backbone, in_keys=[in_key])
+    critic = ValueOperator(module=critic_backbone, in_keys=[in_key])  # 写入 'state_value'
 
     return actor, critic
