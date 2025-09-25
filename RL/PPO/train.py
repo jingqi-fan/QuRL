@@ -16,7 +16,8 @@ from torchrl.objectives.ppo import ClipPPOLoss
 from torchrl.objectives.value import GAE
 
 from RL.PPO.eval import parallel_eval
-from RL.PPO.trainer import PPOTrainerTorchRL, PPOArgs
+from RL.PPO.trainer_pathwise import PathwiseTrainerTorchRL, PathwiseArgs
+from RL.PPO.trainer_wc import PPOTrainerTorchRL, PPOArgs
 from RL.PPO.trainer_vanilla import PPOTrainerTorchRL_Vanilla
 from RL.env.rl_env import RLViewDiffDES
 from RL.policies.WC_policy import WC_Policy
@@ -110,19 +111,66 @@ def train_ppo():
         time_f=time_f
     )
 
+    # 2) 组装 Trainer 的参数（对齐你原来 SB3 的超参语义）
+    pathwise_args = PathwiseArgs(
+        device=device,
+        obs_dim=int(train_obs_dim),
+        S=int(orig_s),
+        Q=int(orig_q),
+        hidden=int(scale * int(np.sqrt(orig_q * orig_s))),  # 与原来 scale * sqrt(L*J) 对齐
+        # rollout
+        episode_steps=int(episode_steps),
+        train_batch=int(train_batch),
+        test_batch=int(test_batch),
+        # PPO
+        gamma=float(gamma),
+        max_grad_norm=1.0,  # 与原来一致
+        # LR（分别对 policy / value）
+        lr_policy=float(lr_policy),
+        lr_value=float(lr_value),
+        min_lr_policy=float(min_lr_policy),
+        min_lr_value=float(min_lr_value),
+        warmup=0.03,  # 与之前实现相同的 warmup 比例
+        # 训练轮次
+        total_epochs=int(num_epochs),
+        rescale_value=bool(rescale_v),
+        behavior_cloning=bool(bc),
+        bc_samples=1000,  # 与原 parallel_eval.BCD 一致
+        bc_lr=3e-4,  # 与原 BC 优化器一致
+        # 评估
+        eval_every=1,  # 每个 epoch 评估一次（原来每个 episode_steps 调一次）
+        eval_T=int(test_T),
+        randomize=randomize,
+        tau=env_temp,
+        cost_is_negative_reward=False
+    )
+
     print(f'network {network}, network dim {network.dim()}, network size {network.size()}, network[0] {network[0]}')
+    # # 运行 WC 的
     # trainer = PPOTrainerTorchRL(
     #     train_env=train_env,
     #     eval_env=eval_env,
     #     args=ppo_args,
     #     network_mask=network if network.dim() == 2 else network[0],  # [S,Q] or按需处理
     # )
+
+    # # 运行 vanilla 和 vanilla bc 的
     trainer = PPOTrainerTorchRL_Vanilla(
         train_env=train_env,
         eval_env=eval_env,
         args=ppo_args,
         # network_mask=network if network.dim() == 2 else network[0],  # [S,Q] or按需处理
     )
+
+    # # 运行 pathwise 的
+    trainer = PathwiseTrainerTorchRL(
+        train_env=train_env,
+        eval_env=eval_env,
+        args=pathwise_args,
+        network_mask=network if network.dim() == 2 else network[0],  # [S,Q] or按需处理
+    )
+
+
     # 是否进行行为克隆预训练：由 config 控制（与原流程一致）
     if bc:
         trainer.pre_train() # 可选：如果 policy_config['training']['behavior_cloning'] 为 True
