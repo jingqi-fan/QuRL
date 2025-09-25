@@ -390,6 +390,7 @@ class PPOTrainerTorchRL_Vanilla:
         return max(1, steps_per_epoch * self.args.total_epochs)
 
     # ---------- Behavior Cloning (vanilla) ----------
+    # ---------- Behavior Cloning (vanilla) ----------
     def _behavior_cloning(self):
         self.print("[BC] start (vanilla)")
         dataset = BCDVanilla(self.args.bc_samples, self.args.S, self.args.Q, time_f=self.args.time_f)
@@ -397,18 +398,33 @@ class PPOTrainerTorchRL_Vanilla:
         opt = torch.optim.Adam(self.policy.pi.parameters(), lr=self.args.bc_lr)
         device = torch.device(self.args.device)
         self.policy.train()
+
         for i, (obs, target) in enumerate(loader):
-            obs = obs.to(device)                             # [B, Q(+1)]
-            target = target.to(device)                       # [S,Q]
-            std_obs = self._standardize_queues(obs)
-            logits, _ = self.policy(std_obs)                 # [B,S,Q]
-            pred = F.softmax(logits, dim=-1)                 # vanilla 概率
-            target_b = target.unsqueeze(0).expand(pred.shape[0], -1, -1)
+            # obs: [B, Q(+1)]，target: [B, S, Q]（由 DataLoader 自动堆叠）
+            obs = obs.to(device)
+            target = target.to(device)
+
+            std_obs = self._standardize_queues(obs)  # [B, obs_dim]
+            logits, _ = self.policy(std_obs)  # [B, S, Q]
+            pred = F.softmax(logits, dim=-1)  # [B, S, Q]
+
+            # 与 pred 对齐 target 的形状
+            if target.dim() == 2:
+                # 兼容极端情况下的 [S, Q]
+                target_b = target.unsqueeze(0).expand(pred.shape[0], -1, -1)
+            elif target.dim() == 3:
+                # 正常情况：DataLoader 已堆叠成 [B, S, Q]
+                target_b = target
+            else:
+                raise RuntimeError(f"Unexpected BC target shape: {tuple(target.shape)}")
+
             loss = F.mse_loss(pred, target_b)
+
             opt.zero_grad(set_to_none=True)
             loss.backward()
             nn.utils.clip_grad_norm_(self.policy.parameters(), self.args.max_grad_norm)
             opt.step()
+
         self.print("[BC] done")
 
     # ---------- Evaluation ----------
