@@ -17,6 +17,7 @@ from torchrl.objectives.value import GAE
 
 from RL.PPO.eval import parallel_eval
 from RL.PPO.trainer import PPOTrainerTorchRL, PPOArgs
+from RL.PPO.trainer_vanilla import PPOTrainerTorchRL_Vanilla
 from RL.env.rl_env import RLViewDiffDES
 from RL.policies.WC_policy import WC_Policy
 from RL.policies.pathwise_policy import Pathwise_Policy
@@ -110,11 +111,17 @@ def train_ppo():
     )
 
     print(f'network {network}, network dim {network.dim()}, network size {network.size()}, network[0] {network[0]}')
-    trainer = PPOTrainerTorchRL(
+    # trainer = PPOTrainerTorchRL(
+    #     train_env=train_env,
+    #     eval_env=eval_env,
+    #     args=ppo_args,
+    #     network_mask=network if network.dim() == 2 else network[0],  # [S,Q] or按需处理
+    # )
+    trainer = PPOTrainerTorchRL_Vanilla(
         train_env=train_env,
         eval_env=eval_env,
         args=ppo_args,
-        network_mask=network if network.dim() == 2 else network[0],  # [S,Q] or按需处理
+        # network_mask=network if network.dim() == 2 else network[0],  # [S,Q] or按需处理
     )
     # 是否进行行为克隆预训练：由 config 控制（与原流程一致）
     if bc:
