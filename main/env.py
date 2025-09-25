@@ -190,6 +190,11 @@ class BatchedDiffDES(EnvBase):
         time_now = self._time             # [B,1]
         arrival_times = self._arrival_times  # [B,Q]
         service_times = self._service_times  # [B,Q,J]
+
+
+        service_times_calc = service_times
+
+
         job_counts = self._job_counts        # [B,Q]
         B = queues.shape[0]
 
@@ -211,8 +216,8 @@ class BatchedDiffDES(EnvBase):
         # 有效完成时间：service_time / rate（未分配或不存在的作业置为 big）
         eff_times = torch.where(
             valid_job_mask,
-            torch.where(job_rates > 0, service_times / (job_rates + self.eps), torch.full_like(service_times, self.big)),
-            torch.full_like(service_times, self.big),
+            torch.where(job_rates > 0, service_times_calc / (job_rates + self.eps), torch.full_like(service_times_calc, self.big)),
+            torch.full_like(service_times_calc, self.big),
         )  # [B,Q,J]
 
         # 队列最早完成时间
@@ -253,7 +258,10 @@ class BatchedDiffDES(EnvBase):
             can_write = arrived_mask & (job_counts < self.J)
 
             # 在 write_pos 写入新作业时间
-            service_times.scatter_(2, write_pos.unsqueeze(-1), new_service.unsqueeze(-1))
+            # service_times.scatter_(2, write_pos.unsqueeze(-1), new_service.unsqueeze(-1))
+
+            service_times = service_times.scatter(2, write_pos.unsqueeze(-1), new_service.unsqueeze(-1))
+
             # 计数 +1（未满）
             job_counts = torch.where(can_write, job_counts + 1, job_counts)
 
@@ -265,9 +273,16 @@ class BatchedDiffDES(EnvBase):
                 idx = which_job.clamp(min=0, max=self.J - 1)
                 last_pos = (job_counts - 1).clamp(min=0)  # [B,Q]
                 gather_last = service_times.gather(2, last_pos.unsqueeze(-1))  # [B,Q,1]
-                service_times.scatter_(2, idx.unsqueeze(-1), gather_last)
+                # service_times.scatter_(2, idx.unsqueeze(-1), gather_last)
+
+                service_times = service_times.scatter(2, idx.unsqueeze(-1), gather_last)
+
+
                 zero_src = torch.zeros_like(gather_last)
-                service_times.scatter_(2, last_pos.unsqueeze(-1), zero_src)
+                # service_times.scatter_(2, last_pos.unsqueeze(-1), zero_src)
+
+                service_times = service_times.scatter(2, last_pos.unsqueeze(-1), zero_src)
+
                 job_counts = torch.where(effective_left, (job_counts - 1).clamp(min=0), job_counts)
 
         # 写回内部状态

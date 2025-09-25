@@ -162,13 +162,13 @@ def train_ppo():
         # network_mask=network if network.dim() == 2 else network[0],  # [S,Q] or按需处理
     )
 
-    # # 运行 pathwise 的
-    trainer = PathwiseTrainerTorchRL(
-        train_env=train_env,
-        eval_env=eval_env,
-        args=pathwise_args,
-        network_mask=network if network.dim() == 2 else network[0],  # [S,Q] or按需处理
-    )
+    # # # 运行 pathwise 的
+    # trainer = PathwiseTrainerTorchRL(
+    #     train_env=train_env,
+    #     eval_env=eval_env,
+    #     args=pathwise_args,
+    #     network_mask=network if network.dim() == 2 else network[0],  # [S,Q] or按需处理
+    # )
 
 
     # 是否进行行为克隆预训练：由 config 控制（与原流程一致）
