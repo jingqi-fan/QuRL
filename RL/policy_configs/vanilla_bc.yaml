@@ -1,6 +1,6 @@
 name: 'PPO'
 env:
-  device: 'cpu'
+  device: 'cuda'
   env_temp: 1.0
   straight_through_min: False
   model_seed: 100

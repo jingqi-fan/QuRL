@@ -7,22 +7,11 @@ import time
 import numpy as np
 import yaml
 import torch
-import torch.nn as nn
-from torchrl.collectors import SyncDataCollector
-from torchrl.envs import SerialEnv
-from torchrl.modules import MLP, ProbabilisticActor, ValueOperator
-from tensordict.nn import TensorDictModule
-from torchrl.objectives.ppo import ClipPPOLoss
-from torchrl.objectives.value import GAE
 
-from RL.PPO.eval import parallel_eval
 from RL.PPO.trainer_pathwise import PathwiseTrainerTorchRL, PathwiseArgs
 from RL.PPO.trainer_wc import PPOTrainerTorchRL, PPOArgs
 from RL.PPO.trainer_vanilla import PPOTrainerTorchRL_Vanilla
 from RL.env.rl_env import RLViewDiffDES
-from RL.policies.WC_policy import WC_Policy
-from RL.policies.pathwise_policy import Pathwise_Policy
-from RL.policies.vanilla_policy import Vanilla_Policy
 from RL.utils.count_time import count_time
 
 
@@ -145,30 +134,30 @@ def train_ppo():
         cost_is_negative_reward=False
     )
 
-    print(f'network {network}, network dim {network.dim()}, network size {network.size()}, network[0] {network[0]}')
-    # # 运行 WC 的
-    # trainer = PPOTrainerTorchRL(
-    #     train_env=train_env,
-    #     eval_env=eval_env,
-    #     args=ppo_args,
-    #     network_mask=network if network.dim() == 2 else network[0],  # [S,Q] or按需处理
-    # )
-
-    # # 运行 vanilla 和 vanilla bc 的
-    trainer = PPOTrainerTorchRL_Vanilla(
-        train_env=train_env,
-        eval_env=eval_env,
-        args=ppo_args,
-        # network_mask=network if network.dim() == 2 else network[0],  # [S,Q] or按需处理
-    )
-
-    # # # 运行 pathwise 的
-    # trainer = PathwiseTrainerTorchRL(
-    #     train_env=train_env,
-    #     eval_env=eval_env,
-    #     args=pathwise_args,
-    #     network_mask=network if network.dim() == 2 else network[0],  # [S,Q] or按需处理
-    # )
+    if policy_file_name == 'WC.yaml' or policy_file_name == 'WC':
+        # 运行 WC 的
+        trainer = PPOTrainerTorchRL(
+            train_env=train_env,
+            eval_env=eval_env,
+            args=ppo_args,
+            network_mask=network if network.dim() == 2 else network[0],  # [S,Q] or按需处理
+        )
+    elif policy_file_name == 'pathwise.yaml' or policy_file_name == 'pathwise':
+        # # 运行 pathwise 的
+        trainer = PathwiseTrainerTorchRL(
+            train_env=train_env,
+            eval_env=eval_env,
+            args=pathwise_args,
+            network_mask=network if network.dim() == 2 else network[0],  # [S,Q] or按需处理
+        )
+    else:
+        # # 运行 vanilla 和 vanilla bc 的
+        trainer = PPOTrainerTorchRL_Vanilla(
+            train_env=train_env,
+            eval_env=eval_env,
+            args=ppo_args,
+            # network_mask=network if network.dim() == 2 else network[0],  # [S,Q] or按需处理
+        )
 
 
     # 是否进行行为克隆预训练：由 config 控制（与原流程一致）
