@@ -105,6 +105,8 @@ def train_ppo():
         # 评估
         eval_every=1,  # 每个 epoch 评估一次（原来每个 episode_steps 调一次）
         eval_T=int(test_T),
+        randomize=randomize,
+        time_f=time_f
     )
 
     print(f'network {network}, network dim {network.dim()}, network size {network.size()}, network[0] {network[0]}')

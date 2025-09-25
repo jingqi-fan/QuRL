@@ -27,8 +27,8 @@ training:
   actors: 8
   episode_steps: 64
   num_epochs: 2
-  train_batch: 16
-  test_batch: 16
+  train_batch: 2
+  test_batch: 2
   lr: 0.0003
   lr_policy: 0.0009
   lr_value: 0.0003
@@ -38,7 +38,7 @@ training:
   gamma: 0.998
   target_kl: 0.03
   vf_coef: 1.0
-  batch_size: 512
+  batch_size: 16
   ppo_epochs: 6
   clip_range_vf: null
   ent_coef: 0.0
