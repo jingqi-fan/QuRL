@@ -33,30 +33,22 @@ class RLViewDiffDES(BatchedDiffDES):
         # action_spec / reward_spec / done_spec 沿用父类已生成的
 
     def _filter_obs(self, td: TensorDictBase) -> TensorDictBase:
-        """
-        将父类产生的输出裁剪/映射为 obs：
-          - time_f=True  -> obs = cat([queues, time], -1)
-          - time_f=False -> obs = queues
-        其余非观测字段（如 reward/done/event_time 等）原样保留。
-        """
         out = TensorDict({}, batch_size=td.batch_size)
-        # 先拷贝非观测字段
+
+        # 拷贝非观测字段（reward / done / event_time 等）
         for k, v in td.items():
-            if k not in ("queues", "time", "params"):
+            if k not in ("queues", "time"):
                 out.set(k, v)
 
-        # 组装 obs
-        q = td.get("queues", None)
+        q = td.get("queues", None)  # [B,Q]
         if q is None:
-            # 允许 reset 输入时没有 queues（例如从空 TensorDict 调用）
-            # 这种情况下直接返回原样（让上游 reset 再次调用）
             return td
 
         if self.time_f and "time" in td.keys():
-            t = td.get("time")
-            obs = torch.cat([q, t], dim=-1)  # shape: (Q+1,)
+            t = td.get("time")  # [B,1]
+            obs = torch.cat([q, t], dim=-1)  # [B, Q+1]
         else:
-            obs = q  # shape: (Q,)
+            obs = q  # [B, Q]
 
         out.set("obs", obs)
         return out

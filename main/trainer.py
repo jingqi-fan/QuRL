@@ -229,8 +229,7 @@ class Trainer:
                 # 奖励 / 代价
                 total_cost += out["next", "reward"]
                 time_weight_queue_len += out["next", "queues"] * out["next", "event_time"]
-                td = out["next"].select("queues", "time", "params")
-
+                td = out["next"].select("queues", "time")
 
         # -------- 汇总测试指标 --------
         time_now = td["time"]  # [B,1]

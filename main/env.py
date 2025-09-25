@@ -85,10 +85,6 @@ class BatchedDiffDES(EnvBase):
         self.observation_spec = Composite(
             queues=Bounded(low=0.0, high=float("inf"), shape=(self.Q,), dtype=torch.float32),
             time=Unbounded(shape=(1,), dtype=torch.float32),
-            params=Composite(
-                max_jobs=Bounded(low=1, high=self.J, shape=(), dtype=torch.int64),
-                shape=(),
-            ),
             shape=(),
         )
         self.state_spec = self.observation_spec.clone()
@@ -100,15 +96,9 @@ class BatchedDiffDES(EnvBase):
         torch.manual_seed(int(seed) if seed is not None else 0)
 
     def gen_params(self, batch_size=None) -> TensorDictBase:
-        if batch_size is None:
-            batch_size = []
-        td = TensorDict(
-            {"params": TensorDict({"max_jobs": torch.tensor(self.J, dtype=torch.int64, device=self.device)}, [])},
-            [],
-        )
-        if batch_size:
-            td = td.expand(batch_size).contiguous()
-        return td
+        if batch_size is None or batch_size == []:
+            batch_size = torch.Size([self.default_B])
+        return TensorDict({}, batch_size)
 
     def draw_service(self, t: torch.Tensor) -> torch.Tensor:
         return self.draw_service_core(self, t)
@@ -151,7 +141,7 @@ class BatchedDiffDES(EnvBase):
             {
                 "queues": queues.clone(),
                 "time": time_now.clone(),
-                "params": TensorDict({"max_jobs": torch.full(B, self.J, dtype=torch.int64, device=self.device)}, B),
+                # "params": TensorDict({"max_jobs": torch.full(B, self.J, dtype=torch.int64, device=self.device)}, B),
             },
             batch_size=B,
         )
@@ -294,7 +284,6 @@ class BatchedDiffDES(EnvBase):
             {
                 "queues": queues,
                 "time": time_now,
-                "params": TensorDict({"max_jobs": torch.full((B,), self.J, dtype=torch.int64, device=self.device)}, batch_size=bs),
                 "reward": reward,
                 "event_time": event_time,
                 "done": done,

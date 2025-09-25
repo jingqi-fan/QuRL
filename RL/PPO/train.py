@@ -7,15 +7,7 @@ import time
 import numpy as np
 import yaml
 import torch
-import torch.nn as nn
-from torchrl.collectors import SyncDataCollector
-from torchrl.envs import SerialEnv
-from torchrl.modules import MLP, ProbabilisticActor, ValueOperator
-from tensordict.nn import TensorDictModule
-from torchrl.objectives.ppo import ClipPPOLoss
-from torchrl.objectives.value import GAE
 
-from RL.PPO.eval import parallel_eval
 from RL.PPO.trainer import PPOTrainerTorchRL
 from RL.env.rl_env import RLViewDiffDES
 from RL.policies.WC_policy import WC_Policy
