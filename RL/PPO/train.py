@@ -254,7 +254,7 @@ if __name__ == "__main__":
     time_f = policy_config['env']['time_f']
 
     # training hyperparameters
-    actors = policy_config['training']['actors']
+    # actors = policy_config['training']['actors']
     normalize_advantage = policy_config['training']['normalize_advantage']
     normalize_value = policy_config['training']['normalize_value']
     normalize_reward = policy_config['training']['normalize_reward']
@@ -293,7 +293,7 @@ if __name__ == "__main__":
     # policy hyperparameters
     test_policy = policy_config['policy']['test_policy']
     # total steps
-    total_steps = num_epochs * episode_steps * actors
+    # total_steps = num_epochs * episode_steps * actors
     eval_freq = episode_steps
     test_T = env_config['test_T']
 

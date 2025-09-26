@@ -452,26 +452,97 @@ class PPOTrainerTorchRL:
         self.print("[BC] done")
 
     # ---------- Evaluation ----------
+    # @torch.no_grad()
+    # def evaluate(self) -> Tuple[float, float]:
+    #     device = torch.device(self.args.device)
+    #     td = self.eval_env.reset()
+    #     B = self.args.test_batch
+    #     total_r = torch.zeros(B, device=device)
+    #
+    #     for _ in range(self.args.eval_T):
+    #         logits, v = self.policy(td["obs"].to(device))
+    #         if self.args.rescale_value:
+    #             v = v * self.returns_std + self.returns_mean
+    #         probs = self._wc_probs_from_logits_obs(logits, td["obs"].to(device))
+    #         if self.args.randomize:
+    #             a, _ = self._sample_and_logp(probs)
+    #         else:
+    #             a, _ = self._argmax_and_logp(probs)
+    #
+    #         out = self.eval_env.step(TensorDict({"action": a.to(self.eval_env.device)}, batch_size=[B]))
+    #         nxt = out["next"]
+    #         total_r += nxt["reward"].reshape(B).to(device)
+    #         td = nxt
+    #
+    #     return total_r.mean().item(), total_r.std(unbiased=True).item()
+
     @torch.no_grad()
     def evaluate(self) -> Tuple[float, float]:
         device = torch.device(self.args.device)
         td = self.eval_env.reset()
         B = self.args.test_batch
+
         total_r = torch.zeros(B, device=device)
 
+        # 收集用于统计的序列
+        qlens_list = []   # 每步的每个样本的 queue length，shape 累积成 [T, B]
+        costs_list = []   # 同上，cost
+
         for _ in range(self.args.eval_T):
-            logits, v = self.policy(td["obs"].to(device))
+            obs_dev = td["obs"].to(device)  # [B, obs_dim]
+
+            # --- 队列长度：对 obs 的前 Q 维求和
+            Q = self.args.Q
+            queues = obs_dev[:, :Q]
+            qlen_t = queues.sum(dim=-1)  # [B]
+            qlens_list.append(qlen_t)
+
+            # --- 策略动作
+            logits, v = self.policy(obs_dev)
             if self.args.rescale_value:
                 v = v * self.returns_std + self.returns_mean
-            probs = self._wc_probs_from_logits_obs(logits, td["obs"].to(device))
+            probs = self._wc_probs_from_logits_obs(logits, obs_dev)
             if self.args.randomize:
                 a, _ = self._sample_and_logp(probs)
             else:
                 a, _ = self._argmax_and_logp(probs)
 
+            # --- 环境前进一步并记录 reward / cost
             out = self.eval_env.step(TensorDict({"action": a.to(self.eval_env.device)}, batch_size=[B]))
             nxt = out["next"]
-            total_r += nxt["reward"].reshape(B).to(device)
+            r_t = nxt["reward"].reshape(B).to(device)
+            total_r += r_t
+
+            # cost 优先找显式 "cost"，否则假定 cost = -reward
+            if "cost" in nxt.keys():
+                c_t = nxt["cost"].reshape(B).to(device)
+            else:
+                c_t = -r_t
+            costs_list.append(c_t)
+
             td = nxt
 
-        return total_r.mean().item(), total_r.std(unbiased=True).item()
+        # --- 统计：对所有 T×B 样本取 mean 和标准误（SE = std / sqrt(N)）
+        T = self.args.eval_T
+        N = T * B
+
+        qlens = torch.stack(qlens_list, dim=0).reshape(N)      # [N]
+        costs = torch.stack(costs_list, dim=0).reshape(N)      # [N]
+
+        q_mean = qlens.mean().item()
+        # 使用无偏标准差做标准误：std(unbiased=True)/sqrt(N)
+        q_se = (qlens.std(unbiased=True) / math.sqrt(max(1, N))).item()
+
+        cost_mean = costs.mean().item()
+        cost_se = (costs.std(unbiased=True) / math.sqrt(max(1, N))).item()
+
+        # 原来的 return 统计
+        ret_mean = total_r.mean().item()
+        ret_std  = total_r.std(unbiased=True).item()
+
+        # 这里打印新增统计信息；返回值保持原样 (ret_mean, ret_std)
+        self.print(f"  Eval (T={T}, B={B}): "
+                   f"queue mean {q_mean:.4f}, SE {q_se:.4f} | "
+                   f"cost mean {cost_mean:.4f}, SE {cost_se:.4f}")
+
+        return ret_mean, ret_std

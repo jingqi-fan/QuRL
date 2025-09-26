@@ -11,5 +11,5 @@ server_pool_size: [1, 1, 1, 1, 1]
 h: [2,1.,1.,2, 1.]
 init_queues: [0, 0, 0, 0, 0]
 queue_event_options: null
-train_T: 50
-test_T: 10
+train_T: 50000
+test_T: 50000
