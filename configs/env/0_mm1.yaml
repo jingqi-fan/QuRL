@@ -7,6 +7,6 @@ mu: [[1.0]]             # μ = 1.0，服务率
 h: [1]                  # queue holding cost
 init_queues: [0]        # 初始队列长度为 0
 queue_event_options: null   # 用默认 ±1 事件
-train_T: 50000
-test_T: 50000
+train_T: 500
+test_T: 500
 num_pool: 1

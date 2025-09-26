@@ -54,7 +54,6 @@ def load_rl_env(seed, batch):
 
 def train_ppo():
 
-
     train_env, train_act_spec, train_obs_dim = load_rl_env(train_seed, train_batch)
     eval_env, eval_act_spec, eval_obs_dim = load_rl_env(test_seed, test_batch)
 

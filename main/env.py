@@ -5,7 +5,6 @@ from tensordict import TensorDict, TensorDictBase
 from torchrl.envs import EnvBase
 from torchrl.data import Bounded, Composite, Unbounded
 from typing import Optional
-from torchrl.envs.utils import step_mdp
 
 class STargmin(nn.Module):
     def __init__(self, temp: float = 1.0):
@@ -17,12 +16,10 @@ class STargmin(nn.Module):
         soft = self.softmax(-x / self.temp)
         return hard - soft.detach() + soft
 
-
 def masked_min(x: torch.Tensor, mask: torch.Tensor, large: float = 1e9):
     x_masked = torch.where(mask, x, torch.full_like(x, large))
     vals, idx = x_masked.min(dim=-1)
     return vals, idx
-
 
 class BatchedDiffDES(EnvBase):
     metadata = {"render_modes": ["human"], "render_fps": 30}
@@ -116,6 +113,7 @@ class BatchedDiffDES(EnvBase):
             B = tensordict.batch_size
         else:
             B = torch.Size([self.default_B])
+
         queues = tensordict.get("queues", torch.zeros(B + (self.Q,), device=self.device)).float()
         time_now = tensordict.get("time", torch.zeros(B + (1,), device=self.device)).float()
 
@@ -141,89 +139,90 @@ class BatchedDiffDES(EnvBase):
             {
                 "queues": queues.clone(),
                 "time": time_now.clone(),
-                # "params": TensorDict({"max_jobs": torch.full(B, self.J, dtype=torch.int64, device=self.device)}, B),
             },
             batch_size=B,
         )
         return out
 
-    # ---------- 离散名额分配（代码2语义的张量化实现） ----------
-    def _discrete_job_rates_from_action(self, action: torch.Tensor, job_counts: torch.Tensor) -> torch.Tensor:
+    # ---------- 分配与速率（“B 语义”的张量化实现） ----------
+    def _alloc_job_rates_and_counts(self, action: torch.Tensor, job_counts: torch.Tensor):
         """
-        输入:
-          action: [B,S,Q]  (连续)
-          job_counts: [B,Q]
-        过程:
-          1) slots = round(action) ∈ {0,1,2,...}，每个 (s,q) 的离散名额，cap 到 J
-          2) mu_with_grad = mu*action/adj_const，其中 adj_const=1{action<1}?1:action
-          3) 为每个 (s,q) 复制 'slots' 个槽位，得到 [B,Q,S*J] 的槽位速率矩阵
-          4) 每个 (b,q) 取 top-J 槽位作为前 J 个作业的速率，得到 [B,Q,J]
+        与 B 的 allocator 语义对齐：
+        - slots = round(action) ∈ {0,1,2,...}
+        - mu_with_grad = mu * action / adj_const, adj_const = 1{action<1}?1:action
+        - 每队列可用总名额 = sum_s slots[b,s,q]
+        - num_alloc[b,q] = min(job_counts[b,q], 总名额, J)
+        - 为每个 (b,q) 选出前 num_alloc 个“槽位速率”（按 mu_with_grad 降序），得到 [B,Q,J]，超过 num_alloc 的位置置 0
+        返回:
+          job_rates: [B,Q,J]  每个队列按作业位置(0..J-1)的本步分配速率（多余位置 0）
+          num_alloc: [B,Q]    本步实际给到速率的作业个数
         """
         B = action.size(0)
-        mu = self.mu.view(1, self.S, self.Q)  # [1,S,Q] -> broadcast to [B,S,Q]
+        mu = self.mu.view(1, self.S, self.Q)  # [1,S,Q] -> [B,S,Q] (broadcast)
 
-        # step-2: mu_with_grad（与代码2一致）
-        adj_const = action.clone()
-        adj_const = torch.where(adj_const < 1.0, torch.ones_like(adj_const), adj_const)
+        # step-2 保梯度的速率系数
+        adj_const = torch.where(action < 1.0, torch.ones_like(action), action)
         mu_with_grad = mu * action / adj_const  # [B,S,Q]
 
-        # step-1: slots（名额），每 server-queue 不超过 J
-        slots = torch.round(action).to(torch.int64).clamp(min=0, max=self.J)  # [B,S,Q]
+        # step-1 名额
+        slots = torch.round(action).to(torch.int64).clamp(min=0)              # [B,S,Q]
+        total_slots = slots.sum(dim=1)                                        # [B,Q]
+        num_alloc = torch.minimum(job_counts, total_slots)
+        num_alloc = torch.minimum(num_alloc, torch.full_like(num_alloc, self.J))  # cap 到 J
 
-        # 构造每个 server-queue 的 J 个“虚拟槽位”：k < slots ? mu_with_grad : 0
+        # 像 A 一样把每个 (s,q) 的名额展开到 J 个槽位
         k = torch.arange(self.J, device=action.device).view(1, 1, 1, self.J)  # [1,1,1,J]
-        mask_slots = (k < slots.unsqueeze(-1))                                # [B,S,Q,J]
-        rates_per_slot = mu_with_grad.unsqueeze(-1) * mask_slots.float()      # [B,S,Q,J]
+        mask_slots = (k < slots.unsqueeze(-1)).float()                         # [B,S,Q,J]
+        rates_per_slot = mu_with_grad.unsqueeze(-1) * mask_slots              # [B,S,Q,J]
 
-        # 把所有 server 的槽位摊平到每个 queue 的一维： [B,Q,S*J]
+        # 变成每队列的一维槽位集合 [B,Q,S*J]
         rates_flat = rates_per_slot.permute(0, 2, 1, 3).contiguous().view(B, self.Q, self.S * self.J)
 
-        # 对每个 (b,q) 取 top-J，缺的自然补 0
-        topk_vals, _ = torch.topk(rates_flat, k=self.J, dim=-1, largest=True)  # [B,Q,J]
+        # 先取 top-J（固定 k），再用 num_alloc 屏蔽超额位置
+        topJ, _ = torch.topk(rates_flat, k=self.J, dim=-1, largest=True)      # [B,Q,J]
 
-        # 只给实际存在的作业（前 job_counts 个），多余位置最终会被 mask 掉
-        return topk_vals  # [B,Q,J]
+        # 只保留前 num_alloc 个位置，其余清零
+        pos = torch.arange(self.J, device=action.device).view(1, 1, self.J)   # [1,1,J]
+        alloc_mask = (pos < num_alloc.unsqueeze(-1))                           # [B,Q,J]
+        job_rates = torch.where(alloc_mask, topJ, torch.zeros_like(topJ))      # [B,Q,J]
+        return job_rates, num_alloc
 
     # ---------- step ----------
     def _step(self, tensordict: TensorDictBase) -> TensorDictBase:
-        queues = self._queues             # [B,Q]
-        time_now = self._time             # [B,1]
-        arrival_times = self._arrival_times  # [B,Q]
-        service_times = self._service_times  # [B,Q,J]
-
-
-        service_times_calc = service_times
-
-
-        job_counts = self._job_counts        # [B,Q]
+        queues = self._queues                  # [B,Q]
+        time_now = self._time                  # [B,1]
+        arrival_times = self._arrival_times    # [B,Q]
+        service_times = self._service_times    # [B,Q,J]
+        job_counts = self._job_counts          # [B,Q]
         B = queues.shape[0]
 
-        # 动作 [B,S,Q]，与连通性相乘并裁剪
+        # 动作 [B,S,Q]：连通性 & 按 B 的语义限制到队列可服务作业数
         action = tensordict["action"].to(self.device).float()  # [B,S,Q]
         net = self.network.view(1, self.S, self.Q)
         action = torch.clamp(action * net, min=0.0)
+        # B 的约束：每队列每服务器的动作不超过该队列作业数（广播）
+        action = torch.minimum(action, queues.unsqueeze(1).expand(-1, self.S, -1))
 
-        # === 关键改动：使用“离散名额分配”的 job_rates（代码2语义） ===
-        job_rates = self._discrete_job_rates_from_action(action, job_counts)  # [B,Q,J]
+        # 名额分配得每个作业的分配速率（只给前 num_alloc 个）
+        job_rates, num_alloc = self._alloc_job_rates_and_counts(action, job_counts)  # [B,Q,J], [B,Q]
 
-        # 有效作业 mask：pos<job_counts
+        # 有效作业 mask
         pos = torch.arange(self.J, device=self.device).view(1, 1, self.J)
         valid_job_mask = pos < job_counts.unsqueeze(-1)  # [B,Q,J]
 
-        # 有效服务速率，避免除零
-        job_rates = torch.where(valid_job_mask, job_rates, torch.zeros_like(job_rates))
-
-        # 有效完成时间：service_time / rate（未分配或不存在的作业置为 big）
+        # 只在已存在作业且被分配速率>0 的位置定义有效完成时间，否则置大
+        eps = self.eps
+        has_rate = job_rates > 0
         eff_times = torch.where(
             valid_job_mask,
-            torch.where(job_rates > 0, service_times_calc / (job_rates + self.eps), torch.full_like(service_times_calc, self.big)),
-            torch.full_like(service_times_calc, self.big),
+            torch.where(has_rate, service_times / (job_rates + eps), torch.full_like(service_times, self.big)),
+            torch.full_like(service_times, self.big),
         )  # [B,Q,J]
 
         # 队列最早完成时间
         q_done_time, which_job = masked_min(eff_times, valid_job_mask, large=self.big)  # [B,Q], [B,Q]
 
-        # 事件组合：到达 vs 完成
+        # 事件：到达 vs 完成
         event_times = torch.cat([arrival_times, q_done_time], dim=-1)  # [B,2Q]
         outcome = self.st_argmin(event_times)                           # [B,2Q] onehot
 
@@ -233,9 +232,16 @@ class BatchedDiffDES(EnvBase):
         # 事件时间
         event_time = torch.min(event_times, dim=-1, keepdim=True).values  # [B,1]
 
-        # 成本与奖励
+        # 成本与奖励（与 A/B 一致）
         cost = (event_time * queues) @ self.h  # [B,1]
         reward = -cost
+
+        # ====== 关键：对所有“已分配但未完成”的作业扣减剩余工时（B 的语义）======
+        # 已分配位置：pos < num_alloc
+        allocated_mask = (pos < num_alloc.unsqueeze(-1)) & valid_job_mask  # [B,Q,J]
+        # 本步扣减量：event_time * job_rates
+        dec = (event_time.view(B, 1, 1)) * job_rates                        # [B,Q,J]
+        service_times = torch.where(allocated_mask, torch.clamp(service_times - dec, min=0.0), service_times)
 
         # 推进时间与队列
         time_now = time_now + event_time
@@ -244,11 +250,11 @@ class BatchedDiffDES(EnvBase):
         # 更新到达计时器
         arrival_times = arrival_times - event_time
 
-        # 到达/离开 mask
+        # 到达/离开 mask（硬事件）
         arrived_mask = outcome[..., : self.Q] > 0.5   # [B,Q]
         left_mask = outcome[..., self.Q :] > 0.5      # [B,Q]
 
-        # 到达：重采该队列 inter-arrival & 新作业 service time（未满才写入）
+        # 到达：重采 inter-arrival & 新作业 service time（有容量才写入）
         if arrived_mask.any():
             new_inter = self.draw_inter_arrivals(time_now)  # [B,Q]
             arrival_times = torch.where(arrived_mask, arrival_times + new_inter, arrival_times)
@@ -257,32 +263,20 @@ class BatchedDiffDES(EnvBase):
             write_pos = job_counts.clamp(max=self.J - 1)    # [B,Q]
             can_write = arrived_mask & (job_counts < self.J)
 
-            # 在 write_pos 写入新作业时间
-            # service_times.scatter_(2, write_pos.unsqueeze(-1), new_service.unsqueeze(-1))
-
             service_times = service_times.scatter(2, write_pos.unsqueeze(-1), new_service.unsqueeze(-1))
-
-            # 计数 +1（未满）
             job_counts = torch.where(can_write, job_counts + 1, job_counts)
 
-        # 离开：移除 which_job（与尾元素交换并清零）
+        # 离开：按 which_job 移除（与尾交换+清零），并 job_counts -= 1
         if left_mask.any():
             has_job = job_counts > 0
             effective_left = left_mask & has_job
             if effective_left.any():
-                idx = which_job.clamp(min=0, max=self.J - 1)
-                last_pos = (job_counts - 1).clamp(min=0)  # [B,Q]
+                idx = which_job.clamp(min=0, max=self.J - 1)          # [B,Q]
+                last_pos = (job_counts - 1).clamp(min=0)              # [B,Q]
                 gather_last = service_times.gather(2, last_pos.unsqueeze(-1))  # [B,Q,1]
-                # service_times.scatter_(2, idx.unsqueeze(-1), gather_last)
-
                 service_times = service_times.scatter(2, idx.unsqueeze(-1), gather_last)
-
-
                 zero_src = torch.zeros_like(gather_last)
-                # service_times.scatter_(2, last_pos.unsqueeze(-1), zero_src)
-
                 service_times = service_times.scatter(2, last_pos.unsqueeze(-1), zero_src)
-
                 job_counts = torch.where(effective_left, (job_counts - 1).clamp(min=0), job_counts)
 
         # 写回内部状态
@@ -293,8 +287,7 @@ class BatchedDiffDES(EnvBase):
         self._job_counts = job_counts
 
         done = torch.zeros_like(reward, dtype=torch.bool)
-        B = queues.shape[0]
-        bs = torch.Size([B])
+        bs = torch.Size([queues.shape[0]])
         out = TensorDict(
             {
                 "queues": queues,
@@ -306,4 +299,3 @@ class BatchedDiffDES(EnvBase):
             batch_size=bs,
         )
         return out
-        # return step_mdp(out, keep_other=True)
