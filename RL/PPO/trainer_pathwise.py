@@ -109,12 +109,14 @@ class PathwiseTrainerTorchRL:
                  eval_env: EnvBase,
                  args: PathwiseArgs,
                  network_mask: torch.Tensor,   # [S,Q] in {0,1}
-                 print_fn: Callable[[str], None] = print):
+                 print_fn: Callable[[str], None] = print,
+                 ct=None):
         self.train_env = train_env
         self.eval_env = eval_env
         self.args = args
         self.net_mask = network_mask.float()
         self.print = print_fn
+        self.ct = ct
 
         device = torch.device(args.device)
         self.policy = ActorCritic(args.obs_dim, args.S, args.Q, args.hidden).to(device)
@@ -256,9 +258,10 @@ class PathwiseTrainerTorchRL:
 
             pl, vl = self._train_one_epoch_pathwise()
 
-            t1 = time.time()
+            self.ct.get_end_time(time.time())
+            print(f'get total time {self.ct.get_total_time():.2f}s')
             self.print(f"[Epoch {epoch+1}/{self.args.total_epochs}] "
-                       f"time={t1-t0:.2f}s, policy_loss={pl:.5f}, value_loss={vl:.5f}")
+                       f"policy_loss={pl:.5f}, value_loss={vl:.5f}")
 
             if (epoch + 1) % self.args.eval_every == 0:
                 mean_r, std_r = self.evaluate()

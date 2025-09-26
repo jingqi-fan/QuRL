@@ -53,7 +53,7 @@ def load_rl_env(seed, batch):
 
 
 def train_ppo():
-    ct = count_time(time.time())
+
 
     train_env, train_act_spec, train_obs_dim = load_rl_env(train_seed, train_batch)
     eval_env, eval_act_spec, eval_obs_dim = load_rl_env(test_seed, test_batch)
@@ -133,7 +133,7 @@ def train_ppo():
         tau=env_temp,
         cost_is_negative_reward=False
     )
-
+    ct = count_time(time.time())
     if policy_file_name == 'WC.yaml' or policy_file_name == 'WC':
         # 运行 WC 的
         trainer = PPOTrainerTorchRL(
@@ -141,6 +141,7 @@ def train_ppo():
             eval_env=eval_env,
             args=ppo_args,
             network_mask=network if network.dim() == 2 else network[0],  # [S,Q] or按需处理
+            ct=ct
         )
     elif policy_file_name == 'pathwise.yaml' or policy_file_name == 'pathwise':
         # # 运行 pathwise 的
@@ -149,6 +150,7 @@ def train_ppo():
             eval_env=eval_env,
             args=pathwise_args,
             network_mask=network if network.dim() == 2 else network[0],  # [S,Q] or按需处理
+            ct=ct
         )
     else:
         # # 运行 vanilla 和 vanilla bc 的
@@ -157,6 +159,7 @@ def train_ppo():
             eval_env=eval_env,
             args=ppo_args,
             # network_mask=network if network.dim() == 2 else network[0],  # [S,Q] or按需处理
+            ct=ct
         )
 
 

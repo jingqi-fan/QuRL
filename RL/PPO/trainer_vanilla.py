@@ -155,11 +155,13 @@ class PPOTrainerTorchRL_Vanilla:
                  train_env: EnvBase,
                  eval_env: EnvBase,
                  args: PPOArgs,
-                 print_fn: Callable[[str], None] = print):
+                 print_fn: Callable[[str], None] = print,
+                 ct=None):
         self.train_env = train_env
         self.eval_env = eval_env
         self.args = args
         self.print = print_fn
+        self.ct = ct
 
         device = torch.device(args.device)
         self.policy = ActorCritic(args.obs_dim, args.S, args.Q, args.hidden).to(device)
@@ -281,8 +283,9 @@ class PPOTrainerTorchRL_Vanilla:
                 if self.args.target_kl is not None and approx_kl_running > 1.5 * self.args.target_kl:
                     break
 
-            t1 = time.time()
-            self.print(f"[Epoch {epoch+1}/{self.args.total_epochs}] time={t1-t0:.2f}s, KL~{approx_kl_running:.5f}")
+            self.ct.get_end_time(time.time())
+            print(f'get total time {self.ct.get_total_time():.2f}s')
+            self.print(f"[Epoch {epoch+1}/{self.args.total_epochs}] , KL~{approx_kl_running:.5f}")
 
             if (epoch + 1) % self.args.eval_every == 0:
                 mean_r, std_r = self.evaluate()
