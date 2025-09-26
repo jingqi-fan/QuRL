@@ -143,6 +143,15 @@ def train_ppo():
             network_mask=network if network.dim() == 2 else network[0],  # [S,Q] or按需处理
             ct=ct
         )
+    # elif policy_file_name == 'small.yaml':
+    #     # 运行 WC 的
+    #     trainer = PPOTrainerTorchRL(
+    #         train_env=train_env,
+    #         eval_env=eval_env,
+    #         args=ppo_args,
+    #         network_mask=network if network.dim() == 2 else network[0],  # [S,Q] or按需处理
+    #         ct=ct
+    #     )
     elif policy_file_name == 'pathwise.yaml' or policy_file_name == 'pathwise':
         # # 运行 pathwise 的
         trainer = PathwiseTrainerTorchRL(
