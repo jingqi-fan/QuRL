@@ -2,16 +2,16 @@ import yaml
 import random
 
 # ---------- 配置（硬编码） ----------
-N = 200
+N = 10
 train_T = 50000
 test_T = 50000
 p_conn = 0.7  # network 联通(1)的概率；不联通(0)概率=0.3
 
 # 生成 G/G/N 的“Gaussian相关”参数（截断正态的均值/方差）
 # 这里我们随机生成每个队列的到达/服务的均值；你也可以改成固定常数或自定义数组
-ARR_MEAN_MIN, ARR_MEAN_MAX = 0.6, 1.4   # 到达间隔均值（越大 -> 平均间隔更长 -> 到达更稀疏）
+ARR_MEAN_MIN, ARR_MEAN_MAX = 0.2, 1   # 到达间隔均值（越大 -> 平均间隔更长 -> 到达更稀疏）
 ARR_STD = 0.35                           # 到达间隔标准差（截断正态的 std）
-SRV_MEAN_MIN, SRV_MEAN_MAX = 0.6, 1.4   # 服务“工作量”均值（越大 -> 平均工作量更大）
+SRV_MEAN_MIN, SRV_MEAN_MAX = 0.2, 1   # 服务“工作量”均值（越大 -> 平均工作量更大）
 SRV_STD = 0.5                            # 服务工作量标准差
 
 random.seed(42)  # 如不需要确定性，可删除
