@@ -121,6 +121,7 @@ def draw_service(env, time: torch.Tensor) -> torch.Tensor:
     """
     返回 [B,Q] 的正值张量（float32，env.device）
     若 env_config['service_type']=='hyper'，用两种均值的指数混合；否则默认 Exp(mean=1)
+    这个生成的是工作量，在env中除以（action乘mu服务速率）
     """
     device = env.device
     B, Q = time.shape[0], env.Q
@@ -139,7 +140,7 @@ def draw_service(env, time: torch.Tensor) -> torch.Tensor:
 
 def draw_inter_arrivals(env, time: torch.Tensor) -> torch.Tensor:
     """
-    返回 [B,Q] 的下一次到达间隔：Exp(rate=λ) => Exp(1)/λ
+    返回 [B,Q] 的下一次到达间隔(多久之后下一次到达发生)：Exp(rate=λ) => Exp(1)/λ
     """
     device = env.device
     B, Q = time.shape[0], env.Q

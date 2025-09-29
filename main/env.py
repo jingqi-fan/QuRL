@@ -147,7 +147,6 @@ class BatchedDiffDES(EnvBase):
     # ---------- 分配与速率（“B 语义”的张量化实现） ----------
     def _alloc_job_rates_and_counts(self, action: torch.Tensor, job_counts: torch.Tensor):
         """
-        与 B 的 allocator 语义对齐：
         - slots = round(action) ∈ {0,1,2,...}
         - mu_with_grad = mu * action / adj_const, adj_const = 1{action<1}?1:action
         - 每队列可用总名额 = sum_s slots[b,s,q]
@@ -170,7 +169,7 @@ class BatchedDiffDES(EnvBase):
         num_alloc = torch.minimum(job_counts, total_slots)
         num_alloc = torch.minimum(num_alloc, torch.full_like(num_alloc, self.J))  # cap 到 J
 
-        # 像 A 一样把每个 (s,q) 的名额展开到 J 个槽位
+        # 把每个 (s,q) 的名额展开到 J 个槽位
         k = torch.arange(self.J, device=action.device).view(1, 1, 1, self.J)  # [1,1,1,J]
         mask_slots = (k < slots.unsqueeze(-1)).float()                         # [B,S,Q,J]
         rates_per_slot = mu_with_grad.unsqueeze(-1) * mask_slots              # [B,S,Q,J]

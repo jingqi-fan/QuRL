@@ -73,7 +73,7 @@ class Trainer:
         S = dq.S
         Q = dq.Q
 
-        for _ in trange(self.env_config['train_T'], disable=False):
+        for _ in trange(self.env_config['train_T'], disable=True, leave=False):
             queues = td["queues"]  # [B,Q]
             time   = td["time"]    # [B,1]
 
@@ -173,7 +173,8 @@ class Trainer:
         with torch.no_grad():
             pbar = trange(self.env_config['test_T'],
                           desc=f"{datetime.now().strftime('%Y-%m-%d-%H-%M-%S')} - {self.experiment_name}",
-                          disable=False)
+                          disable=True,  # <<< 强制关闭
+                          leave=False)
             for step in pbar:
                 queues = td["queues"]   # [B,Q]
                 time   = td["time"]     # [B,1]
