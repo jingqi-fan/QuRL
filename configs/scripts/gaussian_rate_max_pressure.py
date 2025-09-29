@@ -74,43 +74,6 @@ if 'server_pool_size' in env_config.keys():
     env_config['server_pool_size'] = torch.tensor(env_config['server_pool_size']).to(model_config['env']['device'])
 else:
     env_config['server_pool_size'] = torch.ones(orig_s).to(model_config['env']['device'])
-
-
-
-
-lam_type = env_config['lam_type']
-lam_params = env_config['lam_params']
-
-# if lam_params['val'] is None:
-#     if lam_type == 'hyper':
-#         lam_r = np.load(f'configs/env_data/{env_config["env_type"]}/{env_config["env_type"]}_lam.npy')
-#     else:
-#         lam_r = np.load(f'configs/env_data/{name}/{name}_lam.npy')
-# else:
-#     lam_r = lam_params['val']
-#
-# def lam(t, rng = None, batch = None):
-#     if lam_type == 'constant':
-#         lam = lam_r
-#     elif lam_type == 'step':
-#         is_surge = 1*(t.data.cpu().numpy() <= lam_params['t_step'])
-#         lam = is_surge * np.array(lam_params['val1']) + (1 - is_surge) * np.array(lam_params['val2'])
-#     elif lam_type == 'hyper':
-#         scale = lam_params['scale']
-#
-#         def lam_f(rng, t, batch, p, lam_r, scale):
-#             if not rng:
-#                 return lam_r
-#             else:
-#                 lam_r = lam_r.reshape((1,len(lam_r))).repeat(batch, axis = 0)
-#                 switch = rng.binomial(1, p, (batch, 1))
-#                 return switch * (lam_r / (1 + scale)) + (1 - switch) * (lam_r / (1 - scale))
-#         f = lambda rng, t, batch, p, lam_r, scale: lam_f(rng, t, batch, p = 0.5, lam_r = lam_r, scale = scale)
-#         lam = f(rng, t, batch, p=0.5, lam_r = lam_r, scale = scale)
-#     else:
-#         return 'Nonvalid arrival rate'
-#
-#     return lam
     
 
 if env_config['queue_event_options'] == 'custom':
@@ -121,34 +84,94 @@ if env_config['queue_event_options'] == 'custom':
 if type(env_config['queue_event_options']) == list:
     env_config['queue_event_options'] = torch.tensor(env_config['queue_event_options']).float()
 
-def draw_service(self, time):
-    def service_dists(state, batch, t):
-        # ---- 改成 Gaussian 分布 ----
-        mean, std = 5.0, 4.0  # 可以自己调
-        arr = state.normal(loc=mean, scale=std, size=(batch, self.q))
 
-        # 保证正数（截断：负数取绝对值，或者裁掉）
-        arr = np.abs(arr)
+# ------- 小工具 ------- #
+def _expand_param_to_1Q(param, Q, device):
+    """
+    把标量 / list / 1D tensor 统一成形状 [1, Q]、在 device 上的 float32 张量，便于 broadcast。
+    """
+    if isinstance(param, (list, tuple)):
+        t = torch.tensor(param, dtype=torch.float32, device=device)
+    elif isinstance(param, torch.Tensor):
+        t = param.to(device=device, dtype=torch.float32)
+    else:
+        t = torch.tensor([param], dtype=torch.float32, device=device).expand(Q)
+    if t.ndim == 0:
+        t = t.expand(Q)
+    return t.view(1, Q)  # [1,Q]
 
-        return arr
+def _truncnorm_pos(mean_1Q, std_1Q, shape_BQ, device, max_retries=3):
+    """
+    截断正态到 >0：先采样 Normal(mean, std)，若 <=0 则重采几次，最后 clamp 到 epsilon。
+    mean_1Q, std_1Q: [1,Q]
+    返回 shape_BQ: [B,Q]
+    """
+    B, Q = shape_BQ
+    # 逐队列不同 mean/std 的采样：标准正态 * std + mean
+    x = torch.randn((B, Q), device=device) * std_1Q + mean_1Q
+    for _ in range(max_retries):
+        mask = x <= 0
+        if not mask.any():
+            break
+        # 只在负的位置重采
+        rs = torch.randn(mask.sum().item(), device=device)
+        # 需要匹配对应列的 std/mean
+        # 将 rs reshape 为 [k,1]，按列 broadcast 到正确的 std/mean 上
+        # 简化：再整块重采（便于实现；对统计影响极小）
+        x = torch.where(mask, (torch.randn((B, Q), device=device) * std_1Q + mean_1Q), x)
+    return x.clamp_min(1e-6).float()
 
-    service = torch.tensor(service_dists(self.state, self.batch, time)).to(self.device)
-    return service
+# ------- G/G/N 到达 & 服务 ------- #
+def draw_inter_arrivals(env, time: torch.Tensor) -> torch.Tensor:
+    """
+    G/G/N - 到达间隔采样（truncnorm）
+    从 env_config['arrival_dist'] 读取:
+      type: "truncnorm"
+      mean: 标量 / 长度Q 的 list/array
+      std : 标量 / 长度Q 的 list/array
+    返回 [B,Q] 正数，到达间隔（多久后下一次到达）。
+    """
+    device = env.device
+    B, Q = time.shape[0], env.Q
 
+    spec = env_config.get('arrival_dist', None)
+    if spec is None:
+        raise ValueError("env_config['arrival_dist'] 未配置。")
 
-def draw_inter_arrivals(self, time):
+    dist_type = str(spec.get('type', 'truncnorm')).lower()
+    if dist_type != 'truncnorm':
+        raise ValueError(f"当前示例仅实现 truncnorm，到达 dist_type={dist_type}")
 
-    def inter_arrival_dists(state, batch, t):
-        # ----- 改成 Gaussian 分布 -----
-        mean, std = 5.0, 4   # 你可以调参数
-        arr = state.normal(loc=mean, scale=std, size=(batch, orig_q))
-        return np.abs(arr)
+    mean_1Q = _expand_param_to_1Q(spec.get('mean', 1.0), Q, device)
+    std_1Q  = _expand_param_to_1Q(spec.get('std',  0.5), Q, device)
+    return _truncnorm_pos(mean_1Q, std_1Q, (B, Q), device)
 
-    interarrivals = torch.tensor(
-        inter_arrival_dists(self.state, self.batch, time)
-    ).to(self.device)
+def draw_service(env, time: torch.Tensor) -> torch.Tensor:
+    """
+    G/G/N - 服务“工作量”采样（truncnorm）
+    从 env_config['service_dist'] 读取:
+      type: "truncnorm"
+      mean: 标量 / 长度Q 的 list/array
+      std : 标量 / 长度Q 的 list/array
+    返回 [B,Q] 正数，“工作量/服务需求”W（不含 mu）。
+    注意：Env 内部会用 job_rates（含 mu 和名额）来消费工作量：
+          完成时间 = W / job_rates
+    """
+    device = env.device
+    B, Q = time.shape[0], env.Q
 
-    return interarrivals
+    spec = env_config.get('service_dist', None)
+    if spec is None:
+        raise ValueError("env_config['service_dist'] 未配置。")
+
+    dist_type = str(spec.get('type', 'truncnorm')).lower()
+    if dist_type != 'truncnorm':
+        raise ValueError(f"当前示例仅实现 truncnorm，服务 dist_type={dist_type}")
+
+    mean_1Q = _expand_param_to_1Q(spec.get('mean', 1.0), Q, device)
+    std_1Q  = _expand_param_to_1Q(spec.get('std',  0.5), Q, device)
+    return _truncnorm_pos(mean_1Q, std_1Q, (B, Q), device)
+
 
 optimizer = None
 trainer = Trainer(model_config, env_config, policy, optimizer, experiment_name = experiment_name, draw_service = draw_service, draw_inter_arrivals = draw_inter_arrivals)

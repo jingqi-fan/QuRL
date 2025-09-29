@@ -2,9 +2,9 @@ import yaml
 import random
 
 # ---------- 配置（硬编码） ----------
-N = 10
-train_T = 5000
-test_T = 5000
+N = 200
+train_T = 50000
+test_T = 50000
 p_conn = 0.7  # network 联通(1)的概率；不联通(0)概率=0.3
 
 # 生成 G/G/N 的“Gaussian相关”参数（截断正态的均值/方差）
