@@ -40,14 +40,14 @@ network = FlowList([
 # ---------- 生成 mu（与 network 对应） ----------
 # 若 network[i][j] == 0 -> mu[i][j] = 0
 # 若 network[i][j] == 1 -> mu[i][j] ~ U(0,1)
-# mu = FlowList([
-#     FlowList([random.random() if network[i][j] == 1 else 0 for j in range(N)])
-#     for i in range(N)
-# ])
 mu = FlowList([
-    FlowList([1 if network[i][j] == 1 else 0 for j in range(N)])
+    FlowList([random.random() if network[i][j] == 1 else 0 for j in range(N)])
     for i in range(N)
 ])
+# mu = FlowList([
+#     FlowList([1 if network[i][j] == 1 else 0 for j in range(N)])
+#     for i in range(N)
+# ])
 
 
 
