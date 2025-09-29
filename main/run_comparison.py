@@ -45,7 +45,7 @@ def parse_args():
     # 目录
     p.add_argument("--scripts_dir", type=str, default="configs/scripts")
     p.add_argument("--envs_dir", type=str, default="configs/env")
-    p.add_argument("--logs_dir", type=str, default="logs")  # 只存 CSV
+    p.add_argument("--logs_dir", type=str, default="results/cla")  # 只存 CSV
     return p.parse_args()
 
 def ensure_dirs(*dirs):
