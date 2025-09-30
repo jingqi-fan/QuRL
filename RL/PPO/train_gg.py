@@ -9,7 +9,6 @@ import yaml
 import torch
 
 from RL.PPO.trainer_pathwise import PathwiseTrainerTorchRL, PathwiseArgs
-from RL.PPO.trainer_rdm import RandomPolicyTrainer
 from RL.PPO.trainer_wc import PPOTrainerTorchRL, PPOArgs
 from RL.PPO.trainer_vanilla import PPOTrainerTorchRL_Vanilla
 from RL.env.rl_env import RLViewDiffDES
@@ -17,19 +16,92 @@ from RL.utils.count_time import count_time
 
 
 def load_rl_env(seed, batch):
-    # ---- 抽样器（回到 torch 张量） ----
-    def draw_service(env, t: torch.Tensor) -> torch.Tensor:
-        B = t.shape[0]
-        rate = torch.ones(B, orig_q, device=env.device)
-        return torch.distributions.Exponential(rate=rate).sample()
+    # ------- 小工具 ------- #
+    def _expand_param_to_1Q(param, Q, device):
+        """
+        把标量 / list / 1D tensor 统一成形状 [1, Q]、在 device 上的 float32 张量，便于 broadcast。
+        """
+        if isinstance(param, (list, tuple)):
+            t = torch.tensor(param, dtype=torch.float32, device=device)
+        elif isinstance(param, torch.Tensor):
+            t = param.to(device=device, dtype=torch.float32)
+        else:
+            t = torch.tensor([param], dtype=torch.float32, device=device).expand(Q)
+        if t.ndim == 0:
+            t = t.expand(Q)
+        return t.view(1, Q)  # [1,Q]
 
-    def draw_inter_arrivals(env, t: torch.Tensor) -> torch.Tensor:
-        with torch.no_grad():
-            t_now = float(t[0, 0].item()) if t.numel() > 0 else 0.0
-            lam_vec = np.array(lam(t_now), dtype=np.float32)
-            lam_vec = np.maximum(lam_vec, 1e-8)
-        lam_t = torch.as_tensor(lam_vec, device=env.device).view(1, orig_q).expand(t.size(0), orig_q)
-        return torch.distributions.Exponential(rate=lam_t).sample()
+    def _truncnorm_pos(mean_1Q, std_1Q, shape_BQ, device, max_retries=3):
+        """
+        截断正态到 >0：先采样 Normal(mean, std)，若 <=0 则重采几次，最后 clamp 到 epsilon。
+        mean_1Q, std_1Q: [1,Q]
+        返回 shape_BQ: [B,Q]
+        """
+        B, Q = shape_BQ
+        # 逐队列不同 mean/std 的采样：标准正态 * std + mean
+        x = torch.randn((B, Q), device=device) * std_1Q + mean_1Q
+        for _ in range(max_retries):
+            mask = x <= 0
+            if not mask.any():
+                break
+            # 只在负的位置重采
+            rs = torch.randn(mask.sum().item(), device=device)
+            # 需要匹配对应列的 std/mean
+            # 将 rs reshape 为 [k,1]，按列 broadcast 到正确的 std/mean 上
+            # 简化：再整块重采（便于实现；对统计影响极小）
+            x = torch.where(mask, (torch.randn((B, Q), device=device) * std_1Q + mean_1Q), x)
+        return x.clamp_min(1e-6).float()
+
+    # ------- G/G/N 到达 & 服务 ------- #
+    def draw_inter_arrivals(env, time: torch.Tensor) -> torch.Tensor:
+        """
+        G/G/N - 到达间隔采样（truncnorm）
+        从 env_config['arrival_dist'] 读取:
+          type: "truncnorm"
+          mean: 标量 / 长度Q 的 list/array
+          std : 标量 / 长度Q 的 list/array
+        返回 [B,Q] 正数，到达间隔（多久后下一次到达）。
+        """
+        device = env.device
+        B, Q = time.shape[0], env.Q
+
+        spec = env_config.get('arrival_dist', None)
+        if spec is None:
+            raise ValueError("env_config['arrival_dist'] 未配置。")
+
+        dist_type = str(spec.get('type', 'truncnorm')).lower()
+        if dist_type != 'truncnorm':
+            raise ValueError(f"当前示例仅实现 truncnorm，到达 dist_type={dist_type}")
+
+        mean_1Q = _expand_param_to_1Q(spec.get('mean', 1.0), Q, device)
+        std_1Q = _expand_param_to_1Q(spec.get('std', 0.5), Q, device)
+        return _truncnorm_pos(mean_1Q, std_1Q, (B, Q), device)
+
+    def draw_service(env, time: torch.Tensor) -> torch.Tensor:
+        """
+        G/G/N - 服务“工作量”采样（truncnorm）
+        从 env_config['service_dist'] 读取:
+          type: "truncnorm"
+          mean: 标量 / 长度Q 的 list/array
+          std : 标量 / 长度Q 的 list/array
+        返回 [B,Q] 正数，“工作量/服务需求”W（不含 mu）。
+        注意：Env 内部会用 job_rates（含 mu 和名额）来消费工作量：
+              完成时间 = W / job_rates
+        """
+        device = env.device
+        B, Q = time.shape[0], env.Q
+
+        spec = env_config.get('service_dist', None)
+        if spec is None:
+            raise ValueError("env_config['service_dist'] 未配置。")
+
+        dist_type = str(spec.get('type', 'truncnorm')).lower()
+        if dist_type != 'truncnorm':
+            raise ValueError(f"当前示例仅实现 truncnorm，服务 dist_type={dist_type}")
+
+        mean_1Q = _expand_param_to_1Q(spec.get('mean', 1.0), Q, device)
+        std_1Q = _expand_param_to_1Q(spec.get('std', 0.5), Q, device)
+        return _truncnorm_pos(mean_1Q, std_1Q, (B, Q), device)
 
     # ---- 构造环境 ----
     env = RLViewDiffDES(
@@ -161,13 +233,6 @@ def train_ppo():
             network_mask=network if network.dim() == 2 else network[0],  # [S,Q] or按需处理
             ct=ct
         )
-    elif policy_file_name == 'random' or policy_file_name == 'random.yaml':
-        trainer = RandomPolicyTrainer(
-            train_env=train_env,
-            eval_env=eval_env,
-            args=ppo_args,  # 仍然复用 PPOArgs（里头主要是 S, Q, batch, eval_T）
-            ct=ct
-        )
     else:
         # # 运行 vanilla 和 vanilla bc 的
         trainer = PPOTrainerTorchRL_Vanilla(
@@ -229,8 +294,6 @@ if __name__ == "__main__":
     network = env_config["network"].repeat_interleave(1, dim=0)
     mu = env_config["mu"].repeat_interleave(1, dim=0)
 
-    lam_type = env_config["lam_type"]
-    lam_params = env_config["lam_params"]
     h = torch.tensor(env_config["h"]).float()
 
     queue_event_options = env_config["queue_event_options"]
@@ -243,26 +306,26 @@ if __name__ == "__main__":
         else:
             queue_event_options = torch.tensor(queue_event_options)
 
-    if lam_params["val"] is None:
-        lam_r_path = os.path.join(
-            project_root, "configs", "env_data", env_type, f"{env_type}_lam.npy"
-        )
-        lam_r = np.load(lam_r_path)
-    else:
-        lam_r = lam_params["val"]
-
-
-    def lam(t):
-        if lam_type == "constant":
-            lam = lam_r
-        elif lam_type == "step":
-            is_surge = 1 * (t.data.cpu().numpy() <= lam_params["t_step"])
-            lam = is_surge * np.array(lam_params["val1"]) + (1 - is_surge) * np.array(
-                lam_params["val2"]
-            )
-        else:
-            return "Nonvalid arrival rate"
-        return lam
+    # if lam_params["val"] is None:
+    #     lam_r_path = os.path.join(
+    #         project_root, "configs", "env_data", env_type, f"{env_type}_lam.npy"
+    #     )
+    #     lam_r = np.load(lam_r_path)
+    # else:
+    #     lam_r = lam_params["val"]
+    #
+    #
+    # def lam(t):
+    #     if lam_type == "constant":
+    #         lam = lam_r
+    #     elif lam_type == "step":
+    #         is_surge = 1 * (t.data.cpu().numpy() <= lam_params["t_step"])
+    #         lam = is_surge * np.array(lam_params["val1"]) + (1 - is_surge) * np.array(
+    #             lam_params["val2"]
+    #         )
+    #     else:
+    #         return "Nonvalid arrival rate"
+    #     return lam
 
     # env hyperparameters
     device = policy_config['env']['device']
