@@ -25,7 +25,7 @@ training:
   per_iter_normal_value: False
   actors: 16
   episode_steps: 128
-  num_epochs: 50
+  num_epochs: 20
   train_batch: 16
   test_batch: 16
   lr: 0.0003
@@ -37,7 +37,7 @@ training:
   gamma: 0.998
   target_kl: 0.03
   vf_coef: 1.0
-  batch_size: 512
+  batch_size: 256
   ppo_epochs: 6
   clip_range_vf: null
   ent_coef: 0.01
