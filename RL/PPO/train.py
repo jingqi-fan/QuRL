@@ -321,8 +321,8 @@ if __name__ == "__main__":
     results_dir = os.path.join(project_root, "results", "rl")
     os.makedirs(results_dir, exist_ok=True)
 
-    log_file = os.path.join(results_dir, f"{timestamp}_{policy_name}_{env_name}.log")
-    sys.stdout = open(log_file, "w", buffering=1)  # line-buffered
+    log_file = os.path.join(results_dir, f"{timestamp}_{policy_file_name}_{env_name}.log")
+    sys.stdout = open(log_file, "w", buffering=1, encoding="utf-8")
     sys.stderr = sys.stdout  # 错误也写入同一个文件
 
     print(f"[INFO] Logging to {log_file}")

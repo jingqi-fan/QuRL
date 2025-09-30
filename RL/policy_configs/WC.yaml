@@ -11,7 +11,7 @@ env:
   reward_scale: 1.0
 model:
   policy_name: "WC"
-  scale: 5
+  scale: 10
 training:
   behavior_cloning: False
   normalize_advantage: True
@@ -35,10 +35,10 @@ training:
   min_lr_value: 0.00001
   gae_lambda: 0.99
   gamma: 0.998
-  target_kl: 0.1
+  target_kl: 0.03
   vf_coef: 1.0
   batch_size: 512
-  ppo_epochs: 3
+  ppo_epochs: 6
   clip_range_vf: null
   ent_coef: 0.01
 policy:
