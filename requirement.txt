@@ -4,3 +4,4 @@ tqdm
 stable-baselines3
 cvxpy
 scipy
+pyyaml
