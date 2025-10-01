@@ -1,0 +1,18 @@
+下载anaconda
+wget https://repo.anaconda.com/archive/Anaconda3-2024.06-1-Linux-x86_64.sh
+bash Anaconda3-2024.06-1-Linux-x86_64.sh
+source ~/anaconda3/bin/activate
+
+创建conda环境并下载torch
+conda create -n py310 python=3.10 -y
+conda activate py310
+pip install torch==2.5.1+cu121 --extra-index-url https://download.pytorch.org/whl/cu121
+
+去github下载项目
+ssh-keygen -t ed25519 -C "your_email@example.com"
+cat ~/.ssh/id_ed25519.pub
+把复制的key放到github setting ssh key中
+git clone git@github.com:jingqi-fan/QGymGPU.git
+
+安装其他包
+pip install -r requirements.txt

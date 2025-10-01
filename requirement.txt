@@ -1,0 +1,6 @@
+torchrl==0.6
+tensordict==0.6.1
+tqdm
+stable-baselines3
+cvxpy
+scipy
