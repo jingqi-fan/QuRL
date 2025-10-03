@@ -13,6 +13,23 @@ ssh-keygen -t ed25519 -C "your_email@example.com"
 cat ~/.ssh/id_ed25519.pub
 把复制的key放到github setting ssh key中
 git clone git@github.com:jingqi-fan/QGymGPU.git
+cd QGymGPU
 
 安装其他包
 pip install -r requirement.txt
+
+
+下载rl结果到本地
+nohup python -m RL.PPO.pathwise_train pathwise.yaml n_model_mm_10 > /dev/null 2>&1 &
+
+nohup python -m main.run_comparison max_pressure_g n_model_gg_200 > /dev/null 2>&1 &
+python -m main.run_comparison max_pressure_g n_model_gg_10
+
+ssh -p 32077 root@123.37.6.118
+
+scp -P 31180 -r root@123.37.6.118:/root/QGymGPU/results .
+scp -P 32077 -r root@123.37.6.118:/root/QGymGPU/results/rl/ ./rl_results
+
+ps -p 1161868 -o pid,cmd
+
+scp -r jf5524@greene.hpc.nyu.edu:/scratch/jf5524/QGym/results/rl/ .

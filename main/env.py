@@ -280,6 +280,15 @@ class BatchedDiffDES(EnvBase):
 
         # 写回内部状态
         self._queues = queues
+
+        # ---- 警告：检测是否有队列触顶 J ----
+        over_cap = (self._job_counts >= self.J) & (self._queues > self._job_counts)
+        if over_cap.any():
+            max_over = (self._queues - self._job_counts).max().item()
+            print(f"[WARN] Some queues exceeded max_jobs={self.J}, "
+                  f"extra jobs = {max_over}. These jobs are effectively dropped.")
+
+
         self._time = time_now
         self._arrival_times = arrival_times
         self._service_times = service_times
