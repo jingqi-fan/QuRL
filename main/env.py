@@ -85,7 +85,9 @@ class BatchedDiffDES(EnvBase):
             shape=(),
         )
         self.state_spec = self.observation_spec.clone()
-        self.action_spec = Bounded(low=0.0, high=1e6, shape=(self.S, self.Q), dtype=torch.float32)
+        # self.action_spec = Bounded(low=0.0, high=1e6, shape=(self.S, self.Q), dtype=torch.float32)
+        self.action_spec = Bounded(low=0.0, high=1, shape=(self.S, self.Q), dtype=torch.float32)
+
         self.reward_spec = Unbounded(shape=(1,), dtype=torch.float32)
         self.done_spec = Unbounded(shape=(1,), dtype=torch.bool)
 
