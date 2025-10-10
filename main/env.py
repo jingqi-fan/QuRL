@@ -65,6 +65,14 @@ class BatchedDiffDES(EnvBase):
         else:
             self.queue_event_options = queue_event_options.to(self.device).float()
 
+        # 生成 event_map_full：包含到达事件 + J 个完成事件
+        # queue_event_options 形状 [2Q, Q]，前 Q 行 +1，后 Q 行 -1
+        arrive_map = self.queue_event_options[: self.Q]  # [Q, Q]
+        leave_map = self.queue_event_options[self.Q:]  # [Q, Q]
+        # 每个队列有 J 个离开事件
+        leave_map_expanded = leave_map.repeat_interleave(self.J, dim=0)  # [Q*J, Q]
+        self.event_map_full = torch.cat([arrive_map, leave_map_expanded], dim=0).to(self.device)
+
         self._queues = None
         self._time = None
         self._arrival_times = None
@@ -272,14 +280,35 @@ class BatchedDiffDES(EnvBase):
         q_done_time, which_job = masked_min(eff_times, valid_job_mask, large=self.big)  # [B,Q], [B,Q]
 
         # 事件：到达 vs 完成
-        event_times = torch.cat([arrival_times, q_done_time], dim=-1)  # [B,2Q]
-        outcome = self.st_argmin(event_times)                           # [B,2Q] onehot
+        # event_times = torch.cat([arrival_times, q_done_time], dim=-1)  # [B,2Q]
+        # outcome = self.st_argmin(event_times)                           # [B,2Q] onehot
+
+        # 2) 拼成 [B, Q + Q*J] 的候选集合（全局 m+mJ）
+        cand_complete = eff_times.view(B, -1)  # [B, Q*J]
+        event_times = torch.cat([arrival_times,  # [B, Q]
+                                 cand_complete], dim=-1)  # [B, Q + Q*J]
+
+        # 3) ST-argmin：forward=hard one-hot, backward=softmin 梯度
+        outcome = self.st_argmin(event_times)  # [B, Q + Q*J]
+        # 4) 事件时间（建议用 dot，而不是再取 min，确保与 ST 对齐）
+        event_time = (outcome * event_times).sum(dim=-1, keepdim=True)  # [B,1]
+
+        # 5) Δq：用一个 (Q+QJ)×Q 的映射矩阵把 one-hot 变成每队列 +1/-1
+        #    可在 __init__ 里预生成 self.event_map_full，形状 [(Q+Q*J), Q]
+        delta_q = outcome @ self.event_map_full  # [B, Q]
+
+        # 6) 到达/离开掩码（hard）
+        arrived_mask = outcome[..., :self.Q] > 0.5  # [B, Q]
+        left_tail = outcome[..., self.Q:].view(B, self.Q, self.J)  # [B, Q, J]
+        left_mask = left_tail.any(dim=-1)  # [B, Q]
+
+
 
         # 队列增量 Δq
-        delta_q = outcome @ self.queue_event_options  # [B,Q]
+        # delta_q = outcome @ self.queue_event_options  # [B,Q]
 
         # 事件时间
-        event_time = torch.min(event_times, dim=-1, keepdim=True).values  # [B,1]
+        # event_time = torch.min(event_times, dim=-1, keepdim=True).values  # [B,1]
 
         # 成本与奖励（与 A/B 一致）
         cost = (event_time * queues) @ self.h  # [B,1]
@@ -300,8 +329,8 @@ class BatchedDiffDES(EnvBase):
         arrival_times = arrival_times - event_time
 
         # 到达/离开 mask（硬事件）
-        arrived_mask = outcome[..., : self.Q] > 0.5   # [B,Q]
-        left_mask = outcome[..., self.Q :] > 0.5      # [B,Q]
+        # arrived_mask = outcome[..., : self.Q] > 0.5   # [B,Q]
+        # left_mask = outcome[..., self.Q :] > 0.5      # [B,Q]
 
         # 到达：重采 inter-arrival & 新作业 service time（有容量才写入）
         if arrived_mask.any():
@@ -315,18 +344,32 @@ class BatchedDiffDES(EnvBase):
             service_times = service_times.scatter(2, write_pos.unsqueeze(-1), new_service.unsqueeze(-1))
             job_counts = torch.where(can_write, job_counts + 1, job_counts)
 
-        # 离开：按 which_job 移除（与尾交换+清零），并 job_counts -= 1
+        # # 离开：按 which_job 移除（与尾交换+清零），并 job_counts -= 1
+        # if left_mask.any():
+        #     has_job = job_counts > 0
+        #     effective_left = left_mask & has_job
+        #     if effective_left.any():
+        #         idx = which_job.clamp(min=0, max=self.J - 1)          # [B,Q]
+        #         last_pos = (job_counts - 1).clamp(min=0)              # [B,Q]
+        #         gather_last = service_times.gather(2, last_pos.unsqueeze(-1))  # [B,Q,1]
+        #         service_times = service_times.scatter(2, idx.unsqueeze(-1), gather_last)
+        #         zero_src = torch.zeros_like(gather_last)
+        #         service_times = service_times.scatter(2, last_pos.unsqueeze(-1), zero_src)
+        #         job_counts = torch.where(effective_left, (job_counts - 1).clamp(min=0), job_counts)
+
+        # 8) 离开：直接用 left_tail 定位 (q, j)
         if left_mask.any():
-            has_job = job_counts > 0
-            effective_left = left_mask & has_job
-            if effective_left.any():
-                idx = which_job.clamp(min=0, max=self.J - 1)          # [B,Q]
-                last_pos = (job_counts - 1).clamp(min=0)              # [B,Q]
-                gather_last = service_times.gather(2, last_pos.unsqueeze(-1))  # [B,Q,1]
-                service_times = service_times.scatter(2, idx.unsqueeze(-1), gather_last)
-                zero_src = torch.zeros_like(gather_last)
-                service_times = service_times.scatter(2, last_pos.unsqueeze(-1), zero_src)
-                job_counts = torch.where(effective_left, (job_counts - 1).clamp(min=0), job_counts)
+            # 只有一个 (q,j) 会是 1；hard forward 下没歧义
+            which_job = left_tail.float().argmax(dim=-1)  # [B, Q]  (在 left_mask 为 True 的那条队列有效)
+            idx = which_job.clamp(min=0, max=self.J - 1)  # [B, Q]
+            last_pos = (job_counts - 1).clamp(min=0)  # [B, Q]
+
+            # 与尾交换 + 清零（和你现有代码一致）
+            gather_last = service_times.gather(2, last_pos.unsqueeze(-1))  # [B,Q,1]
+            service_times = service_times.scatter(2, idx.unsqueeze(-1), gather_last)
+            zero_src = torch.zeros_like(gather_last)
+            service_times = service_times.scatter(2, last_pos.unsqueeze(-1), zero_src)
+            job_counts = torch.where(left_mask & (job_counts > 0), (job_counts - 1).clamp(min=0), job_counts)
 
         # 写回内部状态
         self._queues = queues
