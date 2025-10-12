@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH -J qgym_gpu_rl
 #SBATCH -o slurm-%j.out
-#SBATCH --time=04:00:00        # 运行时间
+#SBATCH --time=05:00:00        # 运行时间
 #SBATCH --ntasks=1             # 一个任务
 #SBATCH --cpus-per-task=6      # 每个任务 6 核
 #SBATCH --mem=16G
