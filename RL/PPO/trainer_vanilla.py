@@ -504,19 +504,16 @@ class PPOTrainerTorchRL_Vanilla:
         q_std = qlen_overall_per_env.std(unbiased=True)
         q_se = (q_std / math.sqrt(B)).item()
 
-        # cost 同样做“时间平均后再跨 B”
-        cost_per_env = (time_weight_cost / time_now.clamp_min(1e-12))  # [B]
-        cost_mean = cost_per_env.mean().item()
-        cost_se = (cost_per_env.std(unbiased=True) / math.sqrt(B)).item()
 
         # 保持原有的 return 统计/返回
         # ret_mean = total_r.mean().item()
         # ret_std = total_r.std(unbiased=True).item()
-
-        self.print(
-            f"  Eval (B={B}): queue length mean (overall): {q_mean:.4f}, SE {q_se:.4f} | "
-            f"time-avg cost mean {cost_mean:.4f}, SE {cost_se:.4f}"
-        )
+        self.print(f"Eval (B={B}): queue length mean (overall): {q_mean:.4f}")
+        self.print(f"se (overall): {q_se:.4f}")
+        # self.print(
+        #     f"  Eval (B={B}): queue length mean (overall): {q_mean:.4f}, SE {q_se:.4f} | "
+        #     f"time-avg cost mean {cost_mean:.4f}, SE {cost_se:.4f}"
+        # )
         # return ret_mean, ret_std
 
     # @torch.no_grad()

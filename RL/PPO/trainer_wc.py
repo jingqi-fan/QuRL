@@ -522,8 +522,8 @@ class PPOTrainerTorchRL:
         qlen_std = qlen_overall_per_env.std(unbiased=True)
         qlen_se = qlen_std / math.sqrt(B)
 
-        self.print(f"  Eval (B={B}): queue length mean (overall): {qlen_mean.item():.4f}")
-        self.print(f"std (overall): {qlen_std.item():.4f}")
+        self.print(f"Eval (B={B}): queue length mean (overall): {qlen_mean.item():.4f}")
+        # self.print(f"std (overall): {qlen_std.item():.4f}")
         self.print(f"se (overall): {qlen_se.item():.4f}")
 
         # 若你仍想保持原函数返回 (mean return, std return)：
