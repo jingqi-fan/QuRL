@@ -12,12 +12,12 @@ set -x
 module purge
 
 # ===== 使用 conda 前缀环境的 python，不做激活 =====
-PY=/scratch/jf5524/conda/py39/bin/python
+PY=/scratch/jf5524/conda/pt-cu121/bin/python
 which "$PY"
 "$PY" -V
 
 # （可选）有些集群需要这两行来找动态库
-export CONDA_PREFIX=/scratch/jf5524/conda/py39
+export CONDA_PREFIX=/scratch/jf5524/conda/pt-cu121
 export LD_LIBRARY_PATH="$CONDA_PREFIX/lib:${LD_LIBRARY_PATH:-}"
 
 # ========= 路径与运行目录 =========
