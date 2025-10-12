@@ -40,4 +40,4 @@ squeue -u $USER
 查看某作业详情
 scontrol show job 675773
 查看作业输出内容
-cat slurm-675763.out
+cat slurm-681642.out
