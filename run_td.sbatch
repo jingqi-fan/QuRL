@@ -51,3 +51,5 @@ PY
 srun --cpu-bind=cores --chdir="$PROJ" "$PY" -m main.run_comparison cmu n_model_mm_10
 
 # 或： srun --cpu-bind=cores "$PY" "$PROJ/main/run_experiments.py" -exp_dir reentrant_5
+
+#675763
