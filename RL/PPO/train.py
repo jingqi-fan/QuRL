@@ -9,7 +9,6 @@ import yaml
 import torch
 
 from RL.PPO.trainer_pathwise import PathwiseTrainerTorchRL, PathwiseArgs
-from RL.PPO.trainer_rdm import RandomPolicyTrainer
 from RL.PPO.trainer_wc import PPOTrainerTorchRL, PPOArgs
 from RL.PPO.trainer_vanilla import PPOTrainerTorchRL_Vanilla
 from RL.env.rl_env import RLViewDiffDES
@@ -159,13 +158,6 @@ def train_ppo():
             eval_env=eval_env,
             args=pathwise_args,
             network_mask=network if network.dim() == 2 else network[0],  # [S,Q] or按需处理
-            ct=ct
-        )
-    elif policy_file_name == 'random' or policy_file_name == 'random.yaml':
-        trainer = RandomPolicyTrainer(
-            train_env=train_env,
-            eval_env=eval_env,
-            args=ppo_args,  # 仍然复用 PPOArgs（里头主要是 S, Q, batch, eval_T）
             ct=ct
         )
     else:
