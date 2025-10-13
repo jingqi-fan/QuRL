@@ -1,11 +1,12 @@
 #!/bin/bash
 #SBATCH -J qgym_gpu_td
 #SBATCH -o slurm-%j.out
-#SBATCH --time=04:00:00        # 运行时间
+#SBATCH --time=05:00:00        # 运行时间
 #SBATCH --ntasks=1             # 一个任务
-#SBATCH --cpus-per-task=6      # 每个任务 6 核
-#SBATCH --mem=16G
+#SBATCH --cpus-per-task=16      # 每个任务 6 核
+#SBATCH --mem=64G
 #SBATCH --gres=gpu:rtx8000:1
+
 
 set -euo pipefail
 set -x
@@ -48,7 +49,21 @@ PY
 # 在 RUNDIR 内运行
 #srun --cpu-bind=cores "$PY" -m main.run_experiments -exp_dir reentrant_5
 # 保留前面的 RUNDIR 创建等步骤
+srun --cpu-bind=cores --chdir="$PROJ" "$PY" -m main.run_comparison cmu n_model_mm_5
+srun --cpu-bind=cores --chdir="$PROJ" "$PY" -m main.run_comparison cmuq n_model_mm_5
+srun --cpu-bind=cores --chdir="$PROJ" "$PY" -m main.run_comparison max_pressure n_model_mm_5
 srun --cpu-bind=cores --chdir="$PROJ" "$PY" -m main.run_comparison cmu n_model_mm_10
+srun --cpu-bind=cores --chdir="$PROJ" "$PY" -m main.run_comparison cmuq n_model_mm_10
+srun --cpu-bind=cores --chdir="$PROJ" "$PY" -m main.run_comparison max_pressure n_model_mm_10
+srun --cpu-bind=cores --chdir="$PROJ" "$PY" -m main.run_comparison cmu n_model_mm_50
+srun --cpu-bind=cores --chdir="$PROJ" "$PY" -m main.run_comparison cmuq n_model_mm_50
+srun --cpu-bind=cores --chdir="$PROJ" "$PY" -m main.run_comparison max_pressure n_model_mm_50
+srun --cpu-bind=cores --chdir="$PROJ" "$PY" -m main.run_comparison cmu n_model_mm_100
+srun --cpu-bind=cores --chdir="$PROJ" "$PY" -m main.run_comparison cmuq n_model_mm_100
+srun --cpu-bind=cores --chdir="$PROJ" "$PY" -m main.run_comparison max_pressure n_model_mm_100
+srun --cpu-bind=cores --chdir="$PROJ" "$PY" -m main.run_comparison cmu n_model_mm_200
+srun --cpu-bind=cores --chdir="$PROJ" "$PY" -m main.run_comparison cmuq n_model_mm_200
+srun --cpu-bind=cores --chdir="$PROJ" "$PY" -m main.run_comparison max_pressure n_model_mm_200
 
 # 或： srun --cpu-bind=cores "$PY" "$PROJ/main/run_experiments.py" -exp_dir reentrant_5
 
