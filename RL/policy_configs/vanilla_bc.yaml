@@ -23,11 +23,11 @@ training:
   var_scaler: 1.0
   per_iter_normal_obs: False
   per_iter_normal_value: False
-  actors: 16
-  episode_steps: 128
-  num_epochs: 20
-  train_batch: 16
-  test_batch: 16
+  actors: 50
+  episode_steps: 256
+  num_epochs: 50
+  train_batch: 50
+  test_batch: 50
   lr: 0.0003 
   lr_policy: 0.0009
   lr_value: 0.0003
@@ -36,9 +36,9 @@ training:
   gae_lambda: 0.99 
   gamma: 0.998 
   target_kl: 0.03
-  vf_coef: 1.0 
-  batch_size: 256
-  ppo_epochs: 6
+  vf_coef: 1.0
+  batch_size: 2048
+  ppo_epochs: 4
   clip_range_vf: null 
   ent_coef: 0.01
 policy: 
