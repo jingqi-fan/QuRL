@@ -28,11 +28,11 @@ training:
 #  num_epochs: 50
 #  train_batch: 10
 #  test_batch: 20
-  actors: 5
-  episode_steps: 512
-  num_epochs: 10
-  train_batch: 16
-  test_batch: 16
+  actors: 50
+  episode_steps: 256
+  num_epochs: 50
+  train_batch: 50
+  test_batch: 50
   lr: 0.0003
   lr_policy: 0.0009
   lr_value: 0.0003
@@ -43,8 +43,8 @@ training:
   target_kl: 0.03
   vf_coef: 1.0
 #  batch_size: 648
-  batch_size: 4096
-  ppo_epochs: 5
+  batch_size: 2048
+  ppo_epochs: 4
   clip_range_vf: null
   ent_coef: 0.01
 policy:

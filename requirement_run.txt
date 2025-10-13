@@ -20,7 +20,7 @@ pip install -r requirement.txt
 
 
 下载rl结果到本地
-nohup python -m RL.PPO.train WC.yaml n_model_mm_10 > /dev/null 2>&1 &
+nohup python -m RL.PPO.train vanilla.yaml n_model_mm_10 > /dev/null 2>&1 &
 
 nohup python -m main.run_comparison max_pressure_g n_model_gg_200 > /dev/null 2>&1 &
 python -m main.run_comparison max_pressure_g n_model_gg_10
