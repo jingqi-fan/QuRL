@@ -329,7 +329,10 @@ class PathwiseTrainerTorchRL:
         # 每并行环境、每队列的“时间平均队列长度”：[B,Q]
         qlen_per_env = time_weight_queue_len / time_now.view(B, 1).clamp_min(1e-12)
         # 与“刚才”一致：对 Q 取均值得到每环境平均队列长度：[B]
+
+
         qlen_overall_per_env = qlen_per_env.mean(dim=1)
+        # qlen_overall_per_env = qlen_per_env.sum(dim=1)
 
         # 跨 B 的统计量
         q_mean = qlen_overall_per_env.mean().item()

@@ -2,10 +2,10 @@ import yaml
 import random
 
 # ---------- 配置（硬编码） ----------
-N = 200
-train_T = 50000
-test_T = 50000
-p_conn = 0.7  # network 联通(1)的概率；不联通(0)概率=0.3
+N = 5
+train_T = 5000
+test_T = 5000
+p_conn = 1  # network 联通(1)的概率；不联通(0)概率=0.3
 
 random.seed(42)  # 如不需要确定性，可删除
 
@@ -39,7 +39,7 @@ mu = FlowList([
 ])
 
 # ---------- 其他字段 ----------
-lam_val = FlowList([random.random() for _ in range(N)])
+lam_val = FlowList([random.uniform(0.001, 2.0) for _ in range(N)])
 h = FlowList([random.random() for _ in range(N)])
 init_queues = FlowList([0 for _ in range(N)])
 

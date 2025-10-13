@@ -666,6 +666,9 @@ class PPOTrainerTorchRL:
 
         # 与“之前”一致的口径：对 Q 求均值得到“每队列平均长度”，再跨 B 做统计
         qlen_overall_per_env = qlen_per_env.mean(dim=1)  # [B] 对每个queue求平均
+
+        # qlen_overall_per_env = qlen_per_env.sum(dim=1)
+
         qlen_mean = qlen_overall_per_env.mean()
         qlen_std = qlen_overall_per_env.std(unbiased=True)
         qlen_se = qlen_std / math.sqrt(B)

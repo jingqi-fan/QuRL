@@ -17,9 +17,14 @@ from RL.utils.count_time import count_time
 
 def load_rl_env(seed, batch):
     # ---- 抽样器（回到 torch 张量） ----
+    # def draw_service(env, t: torch.Tensor) -> torch.Tensor:
+    #     B = t.shape[0]
+    #     rate = torch.ones(B, orig_q, device=env.device)
+    #     return torch.distributions.Exponential(rate=rate).sample()
+
     def draw_service(env, t: torch.Tensor) -> torch.Tensor:
         B = t.shape[0]
-        rate = torch.ones(B, orig_q, device=env.device)
+        rate = torch.full((B, orig_q), 1.0, device=env.device)  # rate = 0.5 → 更大数值
         return torch.distributions.Exponential(rate=rate).sample()
 
     def draw_inter_arrivals(env, t: torch.Tensor) -> torch.Tensor:

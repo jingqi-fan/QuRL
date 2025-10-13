@@ -241,6 +241,9 @@ class Trainer:
 
         qlen_per_env = (time_weight_queue_len / time_now)   # [B,Q]
         qlen_overall_per_env = qlen_per_env.mean(dim=1)     # [B]
+
+        # qlen_overall_per_env = qlen_per_env.sum(dim=1)
+
         qlen_mean = qlen_overall_per_env.mean()
         qlen_std  = qlen_overall_per_env.std(unbiased=True)
         qlen_se   = qlen_std / math.sqrt(B_test)

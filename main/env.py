@@ -228,9 +228,11 @@ class BatchedDiffDES(EnvBase):
         net = self.network.view(1, self.S, self.Q)
         action = torch.clamp(action * net, min=0.0)
         action = torch.minimum(action, queues.unsqueeze(1).expand(-1, self.S, -1))
-        # ---- 加上容量守恒归一化 ----
-        per_server_sum = action.sum(dim=2, keepdim=True).clamp_min(1e-8)
-        action = action / torch.maximum(per_server_sum, torch.ones_like(per_server_sum))
+
+
+        # # ---- 加上容量守恒归一化 ----
+        # per_server_sum = action.sum(dim=2, keepdim=True).clamp_min(1e-8)
+        # action = action / torch.maximum(per_server_sum, torch.ones_like(per_server_sum))
 
         # # 名额分配得每个作业的分配速率（只给前 num_alloc 个）
         # job_rates, num_alloc = self._alloc_job_rates_and_counts(action, job_counts)  # [B,Q,J], [B,Q]
