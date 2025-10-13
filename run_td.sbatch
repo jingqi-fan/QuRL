@@ -1,12 +1,11 @@
 #!/bin/bash
-#SBATCH -J qgym_gpu_td
+#SBATCH -J qgym_gpu_rl
 #SBATCH -o slurm-%j.out
 #SBATCH --time=05:00:00        # 运行时间
 #SBATCH --ntasks=1             # 一个任务
 #SBATCH --cpus-per-task=16      # 每个任务 6 核
 #SBATCH --mem=64G
 #SBATCH --gres=gpu:rtx8000:1
-
 
 set -euo pipefail
 set -x
@@ -33,6 +32,8 @@ nvidia-smi || true
 
 export OMP_NUM_THREADS=${SLURM_CPUS_PER_TASK:-1}
 export PYTHONPATH="$PROJ:${PYTHONPATH:-}"
+#export PYTHONPATH="$PROJ/RL/PPO:$PROJ:${PYTHONPATH:-}"
+
 echo "PYTHONPATH=$PYTHONPATH"
 
 # 可选：PyTorch/CUDA 自检
