@@ -395,14 +395,22 @@ class PPOTrainerTorchRL:
                     ent = self._entropy(probs).mean()
                     value_loss = F.mse_loss(v_pred, ret_mb)
 
+                    # self.opt_pi.zero_grad(set_to_none=True)
+                    # (policy_loss - self.args.ent_coef * ent).backward(retain_graph=True)
+                    # nn.utils.clip_grad_norm_(self.policy.parameters(), self.args.max_grad_norm)
+                    # self.opt_pi.step()
+                    #
+                    # self.opt_v.zero_grad(set_to_none=True)
+                    # (self.args.vf_coef * value_loss).backward()
+                    # nn.utils.clip_grad_norm_(self.policy.parameters(), self.args.max_grad_norm)
+                    # self.opt_v.step()
+
+                    total_loss = (policy_loss - self.args.ent_coef * ent) + (self.args.vf_coef * value_loss)
                     self.opt_pi.zero_grad(set_to_none=True)
-                    (policy_loss - self.args.ent_coef * ent).backward(retain_graph=True)
+                    self.opt_v.zero_grad(set_to_none=True)
+                    total_loss.backward()
                     nn.utils.clip_grad_norm_(self.policy.parameters(), self.args.max_grad_norm)
                     self.opt_pi.step()
-
-                    self.opt_v.zero_grad(set_to_none=True)
-                    (self.args.vf_coef * value_loss).backward()
-                    nn.utils.clip_grad_norm_(self.policy.parameters(), self.args.max_grad_norm)
                     self.opt_v.step()
 
                     self._lr_step()
@@ -453,7 +461,7 @@ class PPOTrainerTorchRL:
 
             probs = self._wc_probs_from_logits_obs(logits, obs[t])
             if self.args.randomize:
-                a, lp = self._sample_and_logp(probs)
+                a, lp = self._sample_and_logp_vec(probs)
             else:
                 a, lp = self._argmax_and_logp(probs)
 
@@ -499,18 +507,27 @@ class PPOTrainerTorchRL:
         probs = probs / probs.sum(dim=-1, keepdim=True).clamp_min(1e-12)
         return probs
 
-    def _sample_and_logp(self, probs: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-        """
-        独立 S 个 Categorical 的采样与 log_prob 和（与你代码一致）
-        """
+    # def _sample_and_logp_vec(self, probs: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+    #     """
+    #     独立 S 个 Categorical 的采样与 log_prob 和（与你代码一致）
+    #     """
+    #     B, S, Q = probs.shape
+    #     a = torch.zeros(B, S, Q, device=probs.device)
+    #     logp = torch.zeros(B, device=probs.device)
+    #     for s in range(S):
+    #         cat = Categorical(probs=probs[:, s, :])
+    #         idx = cat.sample()            # [B]
+    #         a[torch.arange(B), s, idx] = 1.0
+    #         logp += cat.log_prob(idx)
+    #     return a, logp
+    def _sample_and_logp_vec(self, probs):  # probs: [B,S,Q]
         B, S, Q = probs.shape
-        a = torch.zeros(B, S, Q, device=probs.device)
-        logp = torch.zeros(B, device=probs.device)
-        for s in range(S):
-            cat = Categorical(probs=probs[:, s, :])
-            idx = cat.sample()            # [B]
-            a[torch.arange(B), s, idx] = 1.0
-            logp += cat.log_prob(idx)
+        flat = probs.reshape(B * S, Q)
+        idx = torch.multinomial(flat, 1).squeeze(-1)  # [B*S]
+        a = F.one_hot(idx, num_classes=Q).float().reshape(B, S, Q)
+        # logp = sum_s log p_s(a_s)
+        logp = torch.log(flat.gather(1, idx.view(-1, 1)).squeeze(1).clamp_min(1e-12)) \
+            .view(B, S).sum(dim=1)  # [B]
         return a, logp
 
     def _argmax_and_logp(self, probs: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -611,7 +628,7 @@ class PPOTrainerTorchRL:
                 v = v * self.returns_std + self.returns_mean
             probs = self._wc_probs_from_logits_obs(logits, obs)
             if self.args.randomize:
-                a, _ = self._sample_and_logp(probs)
+                a, _ = self._sample_and_logp_vec(probs)
             else:
                 a, _ = self._argmax_and_logp(probs)
 

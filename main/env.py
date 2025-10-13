@@ -132,12 +132,21 @@ class BatchedDiffDES(EnvBase):
         job_counts = torch.clamp(torch.round(queues).long(), min=0)
         job_counts = torch.minimum(job_counts, torch.full_like(job_counts, self.J))
 
-        if job_counts.max() > 0:
-            for j in range(self.J):
-                mask_j = (job_counts > j)  # [B,Q]
-                if mask_j.any():
-                    samp = self.draw_service(time_now)  # [B,Q]
-                    service_times[..., j] = torch.where(mask_j, samp, service_times[..., j])
+        # if job_counts.max() > 0:
+        #     for j in range(self.J):
+        #         mask_j = (job_counts > j)  # [B,Q]
+        #         if mask_j.any():
+        #             samp = self.draw_service(time_now)  # [B,Q]
+        #             service_times[..., j] = torch.where(mask_j, samp, service_times[..., j])
+
+        # 现在的做法: 先 if job_counts.max()>0: 再 for j: if mask_j.any(): ...
+        # 改为一次性采样 J 份，然后用掩码写入：
+        B, Q, J = queues.size(0), self.Q, self.J
+        new_service = self.draw_service(time_now).unsqueeze(-1).expand(B, Q, J)  # [B,Q,J]
+        # 只有 j<job_counts 的位置被写入
+        pos = torch.arange(J, device=self.device).view(1, 1, J)
+        mask = pos < job_counts.unsqueeze(-1)  # [B,Q,J]
+        service_times = torch.where(mask, new_service, service_times)
 
         self._queues = queues
         self._time = time_now
@@ -204,48 +213,6 @@ class BatchedDiffDES(EnvBase):
         job_rates = torch.where(keep, topj_vals, torch.zeros_like(topj_vals))
 
         return job_rates, num_alloc.long()
-
-    # def _alloc_job_rates_and_counts(self, action: torch.Tensor, mu: torch.Tensor, job_counts: torch.Tensor):
-    #     """
-    #     Capacity sharing 分配：
-    #     - mu_eff = mu * action  （[B,S,Q]）
-    #     - 对每个 (b,q) 从所有 server 的 mu_eff[b,:,q] 里选出降序的前 k 个，
-    #       其中 k = min(job_counts[b,q], S, J)
-    #     - 每个作业只由一个 server 服务：将前 k 个 server 的有效速率依次赋给队列中作业位置 [0..k-1]
-    #     返回:
-    #       job_rates: [B, Q, J]  （每个作业位置的服务速率，超出 k 的位置为 0）
-    #       num_alloc: [B, Q]     （该队列本步实际分配的作业数）
-    #     说明:
-    #       mu 形状可为 [1,S,Q] 或 [B,S,Q]；会与 action 进行广播。
-    #     """
-    #     assert action.dim() == 3, "action must be [B,S,Q]"
-    #     B, S, Q = action.shape
-    #     J = self.J
-    #
-    #     # 有效服务率
-    #     mu_eff = mu * action  # broadcasting to [B,S,Q]
-    #
-    #     job_rates = torch.zeros(B, Q, J, device=action.device, dtype=action.dtype)
-    #     num_alloc = torch.zeros(B, Q, device=action.device, dtype=torch.long)
-    #
-    #     for b in range(B):
-    #         for q in range(Q):
-    #             eff = mu_eff[b, :, q]  # [S]
-    #             valid = eff > 0
-    #             if not valid.any():
-    #                 continue
-    #
-    #             eff_valid = eff[valid]  # [S']
-    #             # 选出能服务该队列的 server，按速率降序
-    #             order = torch.argsort(eff_valid, descending=True)
-    #             # 本队列要服务的作业数
-    #             k = int(min(int(job_counts[b, q].item()), int(order.numel()), J))
-    #             if k > 0:
-    #                 topk = eff_valid[order[:k]]  # [k]
-    #                 job_rates[b, q, :k] = topk
-    #                 num_alloc[b, q] = k
-    #
-    #     return job_rates, num_alloc
 
     # ---------- step ----------
     def _step(self, tensordict: TensorDictBase) -> TensorDictBase:
@@ -352,19 +319,6 @@ class BatchedDiffDES(EnvBase):
 
             service_times = service_times.scatter(2, write_pos.unsqueeze(-1), new_service.unsqueeze(-1))
             job_counts = torch.where(can_write, job_counts + 1, job_counts)
-
-        # # 离开：按 which_job 移除（与尾交换+清零），并 job_counts -= 1
-        # if left_mask.any():
-        #     has_job = job_counts > 0
-        #     effective_left = left_mask & has_job
-        #     if effective_left.any():
-        #         idx = which_job.clamp(min=0, max=self.J - 1)          # [B,Q]
-        #         last_pos = (job_counts - 1).clamp(min=0)              # [B,Q]
-        #         gather_last = service_times.gather(2, last_pos.unsqueeze(-1))  # [B,Q,1]
-        #         service_times = service_times.scatter(2, idx.unsqueeze(-1), gather_last)
-        #         zero_src = torch.zeros_like(gather_last)
-        #         service_times = service_times.scatter(2, last_pos.unsqueeze(-1), zero_src)
-        #         job_counts = torch.where(effective_left, (job_counts - 1).clamp(min=0), job_counts)
 
         # 8) 离开：直接用 left_tail 定位 (q, j)
         if left_mask.any():
