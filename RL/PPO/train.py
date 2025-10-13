@@ -31,7 +31,20 @@ def load_rl_env(seed, batch):
         return torch.distributions.Exponential(rate=lam_t).sample()
 
     # ---- 构造环境 ----
-    env = RLViewDiffDES(
+    # env = RLViewDiffDES(
+    #     network=network,
+    #     mu=mu,
+    #     h=h,
+    #     draw_service=draw_service,
+    #     draw_inter_arrivals=draw_inter_arrivals,
+    #     temp=env_temp,
+    #     device=device,
+    #     seed=seed,
+    #     default_B=batch,
+    #     queue_event_options=queue_event_options,
+    #     time_f=time_f,
+    # ).to(device)
+    env = (RLViewDiffDES(
         network=network,
         mu=mu,
         h=h,
@@ -43,7 +56,10 @@ def load_rl_env(seed, batch):
         default_B=batch,
         queue_event_options=queue_event_options,
         time_f=time_f,
-    ).to(device)
+    ))
+    # env.reset()
+    # print(td)
+    # env =env.to("cuda:0")
 
     act_spec = env.action_spec
     obs_spec = env.observation_spec

@@ -8,4 +8,6 @@ init_queues: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
 queue_event_options: null
 train_T: 30000
 test_T: 50000
+#train_T: 30
+#test_T: 50
 num_pool: 1
