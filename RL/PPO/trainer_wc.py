@@ -433,7 +433,6 @@ class PPOTrainerTorchRL:
         """
         device = self.device
         td = env.reset()
-        print(td)
         # 确保环境返回的数据与 policy 在同一 device
         # assert td.device == device or str(td.device) == str(device), \
         #     f"Env and model on different devices: env={td.device}, model={device}"

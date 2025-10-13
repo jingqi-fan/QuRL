@@ -155,88 +155,97 @@ class BatchedDiffDES(EnvBase):
         return out
 
     # # ---------- 分配与速率（“B 语义”的张量化实现） ----------
-    # def _alloc_job_rates_and_counts(self, action: torch.Tensor, job_counts: torch.Tensor):
-    #     """
-    #     - slots = round(action) ∈ {0,1,2,...}
-    #     - mu_with_grad = mu * action / adj_const, adj_const = 1{action<1}?1:action
-    #     - 每队列可用总名额 = sum_s slots[b,s,q]
-    #     - num_alloc[b,q] = min(job_counts[b,q], 总名额, J)
-    #     - 为每个 (b,q) 选出前 num_alloc 个“槽位速率”（按 mu_with_grad 降序），得到 [B,Q,J]，超过 num_alloc 的位置置 0
-    #     返回:
-    #       job_rates: [B,Q,J]  每个队列按作业位置(0..J-1)的本步分配速率（多余位置 0）
-    #       num_alloc: [B,Q]    本步实际给到速率的作业个数
-    #     """
-    #     B = action.size(0)
-    #     mu = self.mu.view(1, self.S, self.Q)  # [1,S,Q] -> [B,S,Q] (broadcast)
-    #
-    #     # step-2 保梯度的速率系数
-    #     adj_const = torch.where(action < 1.0, torch.ones_like(action), action)
-    #     mu_with_grad = mu * action / adj_const  # [B,S,Q]
-    #
-    #     # step-1 名额
-    #     slots = torch.round(action).to(torch.int64).clamp(min=0)              # [B,S,Q]
-    #     total_slots = slots.sum(dim=1)                                        # [B,Q]
-    #     num_alloc = torch.minimum(job_counts, total_slots)
-    #     num_alloc = torch.minimum(num_alloc, torch.full_like(num_alloc, self.J))  # cap 到 J
-    #
-    #     # 把每个 (s,q) 的名额展开到 J 个槽位
-    #     k = torch.arange(self.J, device=action.device).view(1, 1, 1, self.J)  # [1,1,1,J]
-    #     mask_slots = (k < slots.unsqueeze(-1)).float()                         # [B,S,Q,J]
-    #     rates_per_slot = mu_with_grad.unsqueeze(-1) * mask_slots              # [B,S,Q,J]
-    #
-    #     # 变成每队列的一维槽位集合 [B,Q,S*J]
-    #     rates_flat = rates_per_slot.permute(0, 2, 1, 3).contiguous().view(B, self.Q, self.S * self.J)
-    #
-    #     # 先取 top-J（固定 k），再用 num_alloc 屏蔽超额位置
-    #     topJ, _ = torch.topk(rates_flat, k=self.J, dim=-1, largest=True)      # [B,Q,J]
-    #
-    #     # 只保留前 num_alloc 个位置，其余清零
-    #     pos = torch.arange(self.J, device=action.device).view(1, 1, self.J)   # [1,1,J]
-    #     alloc_mask = (pos < num_alloc.unsqueeze(-1))                           # [B,Q,J]
-    #     job_rates = torch.where(alloc_mask, topJ, torch.zeros_like(topJ))      # [B,Q,J]
-    #     return job_rates, num_alloc
-
-    def _alloc_job_rates_and_counts(self, action: torch.Tensor, mu: torch.Tensor, job_counts: torch.Tensor):
+    def _alloc_job_rates_and_counts(self,
+                                    action: torch.Tensor,  # [B,S,Q]
+                                    mu: torch.Tensor,  # [1,S,Q] 或 [B,S,Q]
+                                    job_counts: torch.Tensor):  # [B,Q] (int)
         """
-        Capacity sharing 分配：
-        - mu_eff = mu * action  （[B,S,Q]）
-        - 对每个 (b,q) 从所有 server 的 mu_eff[b,:,q] 里选出降序的前 k 个，
-          其中 k = min(job_counts[b,q], S, J)
-        - 每个作业只由一个 server 服务：将前 k 个 server 的有效速率依次赋给队列中作业位置 [0..k-1]
+        向量化的 Capacity sharing 分配：
+          - mu_eff = mu * action  -> [B,S,Q]
+          - 对每个 (b,q) 在 server 维度选出前 k 个速率 (降序)，
+            其中 k = min(job_counts[b,q], 可用server数, J)
+          - 生成 job_rates[b,q,j]：j=0..k-1 为对应速率，其余为 0
         返回:
-          job_rates: [B, Q, J]  （每个作业位置的服务速率，超出 k 的位置为 0）
-          num_alloc: [B, Q]     （该队列本步实际分配的作业数）
-        说明:
-          mu 形状可为 [1,S,Q] 或 [B,S,Q]；会与 action 进行广播。
+          job_rates: [B,Q,J]
+          num_alloc: [B,Q] (long)
         """
         assert action.dim() == 3, "action must be [B,S,Q]"
         B, S, Q = action.shape
         J = self.J
+        device = action.device
+        dtype = action.dtype
 
-        # 有效服务率
-        mu_eff = mu * action  # broadcasting to [B,S,Q]
+        # 1) 有效速率（<=0 的直接视为不可用）
+        mu_eff = (mu * action).clamp_min(0)  # [B,S,Q]
 
-        job_rates = torch.zeros(B, Q, J, device=action.device, dtype=action.dtype)
-        num_alloc = torch.zeros(B, Q, device=action.device, dtype=torch.long)
+        # 2) 每个 (b,q) 的可用 server 数
+        avail_cnt = (mu_eff > 0).sum(dim=1)  # [B,Q]
 
-        for b in range(B):
-            for q in range(Q):
-                eff = mu_eff[b, :, q]  # [S]
-                valid = eff > 0
-                if not valid.any():
-                    continue
+        # 3) 先在 server 维度取 top-K（K = min(J,S)），得到 [B,Q,K]
+        K = min(J, S)
+        # 把维度换到 [B,Q,S]，便于在最后一维 topk
+        mu_bqs = mu_eff.permute(0, 2, 1).contiguous()  # [B,Q,S]
+        topk_vals, _ = torch.topk(mu_bqs, k=K, dim=-1, largest=True)
 
-                eff_valid = eff[valid]  # [S']
-                # 选出能服务该队列的 server，按速率降序
-                order = torch.argsort(eff_valid, descending=True)
-                # 本队列要服务的作业数
-                k = int(min(int(job_counts[b, q].item()), int(order.numel()), J))
-                if k > 0:
-                    topk = eff_valid[order[:k]]  # [k]
-                    job_rates[b, q, :k] = topk
-                    num_alloc[b, q] = k
+        # 4) 若 J>S，需要在尾部补零到 J 位
+        if J > K:
+            pad = torch.zeros(B, Q, J - K, device=device, dtype=dtype)
+            topj_vals = torch.cat([topk_vals, pad], dim=-1)  # [B,Q,J]
+        else:
+            topj_vals = topk_vals  # [B,Q,J]
 
-        return job_rates, num_alloc
+        # 5) num_alloc = min(job_counts, avail_cnt, J)
+        num_alloc = torch.minimum(job_counts, avail_cnt)
+        num_alloc = torch.minimum(num_alloc, torch.full_like(num_alloc, J))
+
+        # 6) 只保留前 num_alloc 个位置，其余清零
+        pos = torch.arange(J, device=device).view(1, 1, J)  # [1,1,J]
+        keep = pos < num_alloc.unsqueeze(-1)  # [B,Q,J]
+        job_rates = torch.where(keep, topj_vals, torch.zeros_like(topj_vals))
+
+        return job_rates, num_alloc.long()
+
+    # def _alloc_job_rates_and_counts(self, action: torch.Tensor, mu: torch.Tensor, job_counts: torch.Tensor):
+    #     """
+    #     Capacity sharing 分配：
+    #     - mu_eff = mu * action  （[B,S,Q]）
+    #     - 对每个 (b,q) 从所有 server 的 mu_eff[b,:,q] 里选出降序的前 k 个，
+    #       其中 k = min(job_counts[b,q], S, J)
+    #     - 每个作业只由一个 server 服务：将前 k 个 server 的有效速率依次赋给队列中作业位置 [0..k-1]
+    #     返回:
+    #       job_rates: [B, Q, J]  （每个作业位置的服务速率，超出 k 的位置为 0）
+    #       num_alloc: [B, Q]     （该队列本步实际分配的作业数）
+    #     说明:
+    #       mu 形状可为 [1,S,Q] 或 [B,S,Q]；会与 action 进行广播。
+    #     """
+    #     assert action.dim() == 3, "action must be [B,S,Q]"
+    #     B, S, Q = action.shape
+    #     J = self.J
+    #
+    #     # 有效服务率
+    #     mu_eff = mu * action  # broadcasting to [B,S,Q]
+    #
+    #     job_rates = torch.zeros(B, Q, J, device=action.device, dtype=action.dtype)
+    #     num_alloc = torch.zeros(B, Q, device=action.device, dtype=torch.long)
+    #
+    #     for b in range(B):
+    #         for q in range(Q):
+    #             eff = mu_eff[b, :, q]  # [S]
+    #             valid = eff > 0
+    #             if not valid.any():
+    #                 continue
+    #
+    #             eff_valid = eff[valid]  # [S']
+    #             # 选出能服务该队列的 server，按速率降序
+    #             order = torch.argsort(eff_valid, descending=True)
+    #             # 本队列要服务的作业数
+    #             k = int(min(int(job_counts[b, q].item()), int(order.numel()), J))
+    #             if k > 0:
+    #                 topk = eff_valid[order[:k]]  # [k]
+    #                 job_rates[b, q, :k] = topk
+    #                 num_alloc[b, q] = k
+    #
+    #     return job_rates, num_alloc
 
     # ---------- step ----------
     def _step(self, tensordict: TensorDictBase) -> TensorDictBase:
