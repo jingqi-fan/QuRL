@@ -33,7 +33,8 @@ scp -P 32077 -r root@123.37.6.118:/root/QGymGPU/results/rl/ ./rl_results
 ps -p 675763 -o pid,cmd
 
 scp -r jf5524@greene.hpc.nyu.edu:/scratch/jf5524/QGymGPU/results/cla/ .
-
+scp -r jf5524@greene.hpc.nyu.edu:/scratch/jf5524/QGymGPU/results/rl/ .
+scp -r jf5524@greene.hpc.nyu.edu:/scratch/jf5524/QGym/results/rl/ .
 
 查看自己所有作业
 squeue -u $USER
