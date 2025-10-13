@@ -20,7 +20,7 @@ pip install -r requirement.txt
 
 
 下载rl结果到本地
-nohup python -m RL.PPO.pathwise_train pathwise.yaml n_model_mm_10 > /dev/null 2>&1 &
+nohup python -m RL.PPO.train WC.yaml n_model_mm_10 > /dev/null 2>&1 &
 
 nohup python -m main.run_comparison max_pressure_g n_model_gg_200 > /dev/null 2>&1 &
 python -m main.run_comparison max_pressure_g n_model_gg_10
@@ -39,6 +39,6 @@ scp -r jf5524@greene.hpc.nyu.edu:/scratch/jf5524/QGym/results/rl/ .
 查看自己所有作业
 squeue -u $USER
 查看某作业详情
-scontrol show job 675773
+scontrol show job 175
 查看作业输出内容
 cat slurm-697085.out
