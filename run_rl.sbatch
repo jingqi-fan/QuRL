@@ -50,6 +50,10 @@ PY
 # 在 RUNDIR 内运行
 #srun --cpu-bind=cores "$PY" -m main.run_experiments -exp_dir reentrant_5
 # 保留前面的 RUNDIR 创建等步骤
+srun --cpu-bind=cores --chdir="$PROJ" "$PY" -m RL.PPO.train WC.yaml n_model_mm_5
 srun --cpu-bind=cores --chdir="$PROJ" "$PY" -m RL.PPO.train WC.yaml n_model_mm_10
+srun --cpu-bind=cores --chdir="$PROJ" "$PY" -m RL.PPO.train WC.yaml n_model_mm_50
+srun --cpu-bind=cores --chdir="$PROJ" "$PY" -m RL.PPO.train WC.yaml n_model_mm_100
+srun --cpu-bind=cores --chdir="$PROJ" "$PY" -m RL.PPO.train WC.yaml n_model_mm_200
 
 # 或： srun --cpu-bind=cores "$PY" "$PROJ/main/run_experiments.py" -exp_dir reentrant_5
