@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH -J qgym_gpu_rl
 #SBATCH -o slurm-%j.out
-#SBATCH --time=07:00:00        # 运行时间
+#SBATCH --time=05:00:00        # 运行时间
 #SBATCH --ntasks=1             # 一个任务
 #SBATCH --cpus-per-task=16      # 每个任务 6 核
 #SBATCH --mem=64G
@@ -51,10 +51,10 @@ PY
 # 在 RUNDIR 内运行
 #srun --cpu-bind=cores "$PY" -m main.run_experiments -exp_dir reentrant_5
 # 保留前面的 RUNDIR 创建等步骤
-srun --cpu-bind=cores --chdir="$PROJ" "$PY" -m RL.PPO.train pathwise.yaml n_model_mm_5
-srun --cpu-bind=cores --chdir="$PROJ" "$PY" -m RL.PPO.train pathwise.yaml n_model_mm_10
-srun --cpu-bind=cores --chdir="$PROJ" "$PY" -m RL.PPO.train pathwise.yaml n_model_mm_50
-srun --cpu-bind=cores --chdir="$PROJ" "$PY" -m RL.PPO.train pathwise.yaml n_model_mm_100
+#srun --cpu-bind=cores --chdir="$PROJ" "$PY" -m RL.PPO.train pathwise.yaml n_model_mm_5
+#srun --cpu-bind=cores --chdir="$PROJ" "$PY" -m RL.PPO.train pathwise.yaml n_model_mm_10
+#srun --cpu-bind=cores --chdir="$PROJ" "$PY" -m RL.PPO.train pathwise.yaml n_model_mm_50
+#srun --cpu-bind=cores --chdir="$PROJ" "$PY" -m RL.PPO.train pathwise.yaml n_model_mm_100
 srun --cpu-bind=cores --chdir="$PROJ" "$PY" -m RL.PPO.train pathwise.yaml n_model_mm_200
 
 # 或： srun --cpu-bind=cores "$PY" "$PROJ/main/run_experiments.py" -exp_dir reentrant_5
