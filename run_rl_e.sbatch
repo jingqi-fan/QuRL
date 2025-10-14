@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH -J qgym_gpu_rl_en_model
 #SBATCH -o slurm-%j.out
-#SBATCH --time=07:00:00
+#SBATCH --time=08:00:00
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=64G
@@ -55,7 +55,7 @@ info(){ echo "[INFO] $*"; }
 
 run() {
   local env_stub="$1"   # 例如: vanilla_bc.yaml
-  local tag="$2"        # 例如: en_model_mm_200
+  local tag="$2"        # 例如: n_model_mm_200
   info "START $(date +'%F %T')  CWD=$(pwd)  run: ${env_stub} ${tag}"
   # 回到项目根，保证相对路径正确
   ( cd "$PROJ" && \
@@ -66,7 +66,6 @@ run() {
   ) || warn "experiment failed: ${env_stub} ${tag}"
   info "END   $(date +'%F %T')  run: ${env_stub} ${tag}"
 }
-
 
 # ====== 串行跑多个实验（不需要 srun）======
 run WC.yaml          en_model_mm_10
