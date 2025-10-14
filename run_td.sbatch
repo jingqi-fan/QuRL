@@ -6,6 +6,7 @@
 #SBATCH --cpus-per-task=16      # 每个任务 6 核
 #SBATCH --mem=64G
 #SBATCH --gres=gpu:rtx8000:1
+#SBATCH --chdir=/scratch/jf5524/QGymGPU
 
 set -euo pipefail
 set -x
