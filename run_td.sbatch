@@ -1,29 +1,32 @@
 #!/bin/bash
 #SBATCH -J qgym_gpu_rl
 #SBATCH -o slurm-%j.out
-#SBATCH --time=05:00:00        # 运行时间
-#SBATCH --ntasks=1             # 一个任务
-#SBATCH --cpus-per-task=16      # 每个任务 6 核
+#SBATCH --time=05:00:00
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=16
 #SBATCH --mem=64G
 #SBATCH --gres=gpu:rtx8000:1
-#SBATCH --chdir=/scratch/jf5524/QGymGPU
+#SBATCH --chdir=/scratch/jf5524/QGymGPU   # 保底：作业启动时的 CWD 就在项目根
 
 set -euo pipefail
 set -x
 module purge
 
-# ===== 使用 conda 前缀环境的 python，不做激活 =====
+# ===== Python 解释器（不激活环境，直接用前缀）=====
 PY=/scratch/jf5524/conda/pt-cu121/bin/python
 which "$PY"
 "$PY" -V
 
-# （可选）有些集群需要这两行来找动态库
+# （可选）部分站点需要设置这些
 export CONDA_PREFIX=/scratch/jf5524/conda/pt-cu121
-export LD_LIBRARY_PATH="$CONDA_PREFIX/lib:${LD_LIBRARY_PATH:-}"
+export LD_LIBRARY_PATH="${CONDA_PREFIX}/lib:${LD_LIBRARY_PATH:-}"
 
-# ========= 路径与运行目录 =========
+# ========= 路径 =========
 PROJ=/scratch/jf5524/QGymGPU
-mkdir -p /scratch/jf5524/QGymGPU/logs
+LOGDIR=${PROJ}/logs
+mkdir -p "$LOGDIR"
+
+# 独立运行目录（用于中间文件/缓存），但注意：跑实验时会切回 $PROJ
 RUNDIR=${SCRATCH:-/scratch/jf5524}/QGymGPU/run-${SLURM_JOB_ID/.*}
 mkdir -p "$RUNDIR"
 cd "$RUNDIR"
@@ -33,11 +36,9 @@ nvidia-smi || true
 
 export OMP_NUM_THREADS=${SLURM_CPUS_PER_TASK:-1}
 export PYTHONPATH="$PROJ:${PYTHONPATH:-}"
-#export PYTHONPATH="$PROJ/RL/PPO:$PROJ:${PYTHONPATH:-}"
-
 echo "PYTHONPATH=$PYTHONPATH"
 
-# 可选：PyTorch/CUDA 自检
+# ====== PyTorch/CUDA 自检 ======
 "$PY" - <<'PY'
 try:
     import torch
@@ -48,35 +49,39 @@ except Exception as e:
     print("PYTORCH_CHECK_FAILED:", e)
 PY
 
-# 在 RUNDIR 内运行
-#srun --cpu-bind=cores "$PY" -m main.run_experiments -exp_dir reentrant_5
-# 保留前面的 RUNDIR 创建等步骤
-#srun --cpu-bind=cores --chdir="$PROJ" "$PY" -m main.run_comparison cmu n_model_mm_5
-#srun --cpu-bind=cores --chdir="$PROJ" "$PY" -m main.run_comparison cmuq n_model_mm_5
-#srun --cpu-bind=cores --chdir="$PROJ" "$PY" -m main.run_comparison max_pressure n_model_mm_5
-#srun --cpu-bind=cores --chdir="$PROJ" "$PY" -m main.run_comparison cmu n_model_mm_10
-#srun --cpu-bind=cores --chdir="$PROJ" "$PY" -m main.run_comparison cmuq n_model_mm_10
-#srun --cpu-bind=cores --chdir="$PROJ" "$PY" -m main.run_comparison max_pressure n_model_mm_10
-#srun --cpu-bind=cores --chdir="$PROJ" "$PY" -m main.run_comparison cmu n_model_mm_50
-#srun --cpu-bind=cores --chdir="$PROJ" "$PY" -m main.run_comparison cmuq n_model_mm_50
-#srun --cpu-bind=cores --chdir="$PROJ" "$PY" -m main.run_comparison max_pressure n_model_mm_50
-#srun --cpu-bind=cores --chdir="$PROJ" "$PY" -m main.run_comparison cmu n_model_mm_100
-#srun --cpu-bind=cores --chdir="$PROJ" "$PY" -m main.run_comparison cmuq n_model_mm_100
-#srun --cpu-bind=cores --chdir="$PROJ" "$PY" -m main.run_comparison max_pressure n_model_mm_100
-#srun --cpu-bind=cores --chdir="$PROJ" "$PY" -m main.run_comparison cmu n_model_mm_200
-#srun --cpu-bind=cores --chdir="$PROJ" "$PY" -m main.run_comparison cmuq n_model_mm_200
-#srun --cpu-bind=cores --chdir="$PROJ" "$PY" -m main.run_comparison max_pressure n_model_mm_200
+# ====== 小工具函数 ======
+warn(){ echo "[WARN] $*" >&2; }
+info(){ echo "[INFO] $*"; }
 
+run() {
+  local script_key="$1"
+  local env_stub="$2"
+  info "START $(date +'%F %T')  CWD=$(pwd)  run: ${script_key} ${env_stub}"
+  # 关键：切回项目根再跑，确保相对路径可用
+  ( cd "$PROJ" && \
+    "$PY" -m main.run_comparison "${script_key}" "${env_stub}" \
+      # 如需显式传绝对路径，也可以取消注释这三行：
+      # --scripts_dir "${PROJ}/configs/scripts" \
+      # --envs_dir    "${PROJ}/configs/env" \
+      # --logs_dir    "${PROJ}/results/cla"
+  ) || warn "experiment failed: ${script_key} ${env_stub}"
+  info "END   $(date +'%F %T')  run: ${script_key} ${env_stub}"
+}
 
-$PY -m main.run_comparison cmu          n_model_mm_50
-$PY -m main.run_comparison cmuq         n_model_mm_50
-$PY -m main.run_comparison max_pressure n_model_mm_50
-$PY -m main.run_comparison cmu          n_model_mm_100
-$PY -m main.run_comparison cmuq         n_model_mm_100
-$PY -m main.run_comparison max_pressure n_model_mm_100
-$PY -m main.run_comparison cmu          n_model_mm_200
-$PY -m main.run_comparison cmuq         n_model_mm_200
-$PY -m main.run_comparison max_pressure n_model_mm_200
-# 或： srun --cpu-bind=cores "$PY" "$PROJ/main/run_experiments.py" -exp_dir reentrant_5
+# ====== 串行跑多个实验（不需要 srun）======
+run cmu          n_model_mm_50
+run cmuq         n_model_mm_50
+run max_pressure n_model_mm_50
 
-#675763
+run cmu          n_model_mm_100
+run cmuq         n_model_mm_100
+run max_pressure n_model_mm_100
+
+run cmu          n_model_mm_200
+run cmuq         n_model_mm_200
+run max_pressure n_model_mm_200
+
+# 如果以后要并行跑（同一作业里开多个进程），改成：
+# srun --exclusive -N1 -n1 bash -lc 'cd "$PROJ" && '"$PY"' -m main.run_comparison cmu  n_model_mm_50' &
+# srun --exclusive -N1 -n1 bash -lc 'cd "$PROJ" && '"$PY"' -m main.run_comparison cmuq n_model_mm_50' &
+# wait
