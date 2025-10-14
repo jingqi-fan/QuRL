@@ -87,7 +87,7 @@ class BatchedDiffDES(EnvBase):
             leave_map_expanded2 = leave_map2.repeat_interleave(self.J, dim=0)  # [Q*J, Q]
             self.event_map_full2 = torch.cat([arrive_map2, leave_map_expanded2], dim=0).to(self.device)
         else:
-            self.event_map_full2 = self.event_map_full
+            self.event_map_full2 = self.event_map_full.to(self.device)
 
             # self._queues = None
         self._time = None
