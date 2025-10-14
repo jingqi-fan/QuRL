@@ -2,10 +2,10 @@ import yaml
 import random
 
 # ---------- 配置（硬编码） ----------
-N = 5
+N = 200
 train_T = 5000
 test_T = 5000
-p_conn = 1  # network 联通(1)的概率；不联通(0)概率=0.3
+p_conn = 0.5  # network 联通(1)的概率；不联通(0)概率=0.3
 
 random.seed(42)  # 如不需要确定性，可删除
 
@@ -58,7 +58,7 @@ data = {
 }
 
 # ---------- 输出（顶层块状，内部矩阵单行） ----------
-output_path = f"../env/n_model_mm_{N}.yaml"
+output_path = f"../env/en_model_mm_{N}.yaml"
 with open(output_path, "w", encoding="utf-8") as f:
     yaml.dump(
         data,
