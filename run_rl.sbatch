@@ -59,7 +59,7 @@ run() {
   info "START $(date +'%F %T')  CWD=$(pwd)  run: ${script_key} ${env_stub}"
   # 关键：切回项目根再跑，确保相对路径可用
   ( cd "$PROJ" && \
-    "$PY" -m main.run_comparison "${script_key}" "${env_stub}" \
+    "$PY" -m RL.PPO.train "${script_key}" "${env_stub}" \
       # 如需显式传绝对路径，也可以取消注释这三行：
       # --scripts_dir "${PROJ}/configs/scripts" \
       # --envs_dir    "${PROJ}/configs/env" \
@@ -69,25 +69,25 @@ run() {
 }
 
 # ====== 串行跑多个实验（不需要 srun）======
-run RL.PPO.train WC.yaml          n_model_mm_10
-run RL.PPO.train pathwise.yaml    n_model_mm_10
-run RL.PPO.train vanilla.yaml     n_model_mm_10
-run RL.PPO.train vanilla_bc.yaml  n_model_mm_10
+run WC.yaml          n_model_mm_10
+run pathwise.yaml    n_model_mm_10
+run vanilla.yaml     n_model_mm_10
+run vanilla_bc.yaml  n_model_mm_10
 
-run RL.PPO.train WC.yaml          n_model_mm_50
-run RL.PPO.train pathwise.yaml    n_model_mm_50
-run RL.PPO.train vanilla.yaml     n_model_mm_50
-run RL.PPO.train vanilla_bc.yaml  n_model_mm_50
+run WC.yaml          n_model_mm_50
+run pathwise.yaml    n_model_mm_50
+run vanilla.yaml     n_model_mm_50
+run vanilla_bc.yaml  n_model_mm_50
 
-run RL.PPO.train WC.yaml          n_model_mm_100
-run RL.PPO.train pathwise.yaml    n_model_mm_100
-run RL.PPO.train vanilla.yaml     n_model_mm_100
-run RL.PPO.train vanilla_bc.yaml  n_model_mm_100
+run WC.yaml          n_model_mm_100
+run pathwise.yaml    n_model_mm_100
+run vanilla.yaml     n_model_mm_100
+run vanilla_bc.yaml  n_model_mm_100
 
-run RL.PPO.train WC.yaml          n_model_mm_200
-run RL.PPO.train pathwise.yaml    n_model_mm_200
-run RL.PPO.train vanilla.yaml     n_model_mm_200
-run RL.PPO.train vanilla_bc.yaml  n_model_mm_200
+run WC.yaml          n_model_mm_200
+run pathwise.yaml    n_model_mm_200
+run vanilla.yaml     n_model_mm_200
+run vanilla_bc.yaml  n_model_mm_200
 
 # 如果以后要并行跑（同一作业里开多个进程），改成：
 # srun --exclusive -N1 -n1 bash -lc 'cd "$PROJ" && '"$PY"' -m main.run_comparison cmu  n_model_mm_50' &
