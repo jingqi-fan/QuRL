@@ -7,7 +7,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from tensordict import TensorDict
-from torch.distributions import Categorical
 from torchrl.envs import EnvBase
 
 
@@ -145,9 +144,8 @@ class PPOArgs:
 class PPOTrainerTorchRL_Vanilla:
     """
     计算逻辑模仿 vanilla_policy.py（纯 softmax）：
-      - probs = softmax(logits)
+      - 使用 logits 直接向量化计算 log_prob/熵/采样（无 Categorical、无循环）
       - 随机/贪心由 randomize 控制
-      - log_prob: 选中概率取 log 并在 S 维求和
       - 可选 value 反标尺
       - 保持 TorchRL 单环境 + 内部多 batch rollout
     """
@@ -190,6 +188,38 @@ class PPOTrainerTorchRL_Vanilla:
     def _standardize_queues(self, obs: torch.Tensor) -> torch.Tensor:
         # 若 obs 包含 time_f 的额外维，这里仍整体减均值/除方差（与 vanilla_policy 的简化一致）
         return ((obs - self.mean_queue) / self.std_queue).float()
+
+    # ---------- 向量化工具（无 Categorical） ----------
+    def _log_prob_of_logits(self, logits: torch.Tensor, one_hot: torch.Tensor) -> torch.Tensor:
+        # logits: [B,S,Q], one_hot: [B,S,Q] (one-hot 动作)
+        logp_all = F.log_softmax(logits, dim=-1)              # [B,S,Q]
+        idx = one_hot.argmax(dim=-1, keepdim=True)            # [B,S,1]
+        logp = logp_all.gather(-1, idx).squeeze(-1)           # [B,S]
+        return logp.sum(dim=-1)                                # [B]
+
+    def _sample_onehot_and_logp(self, logits: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        # logits: [B,S,Q]
+        B, S, Q = logits.shape
+        logp_all = F.log_softmax(logits, dim=-1)              # [B,S,Q]
+        probs    = logp_all.exp()                             # [B,S,Q]
+        idx = torch.multinomial(probs.view(-1, Q), 1).view(B, S, 1)  # [B,S,1]
+        onehot = F.one_hot(idx.squeeze(-1), num_classes=Q).float()   # [B,S,Q]
+        logp   = logp_all.gather(-1, idx).squeeze(-1).sum(dim=-1)    # [B]
+        return onehot, logp
+
+    def _argmax_onehot_and_logp(self, logits: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        B, S, Q = logits.shape
+        logp_all = F.log_softmax(logits, dim=-1)              # [B,S,Q]
+        idx = logits.argmax(dim=-1, keepdim=True)             # [B,S,1]
+        onehot = F.one_hot(idx.squeeze(-1), num_classes=Q).float()
+        logp   = logp_all.gather(-1, idx).squeeze(-1).sum(dim=-1)    # [B]
+        return onehot, logp
+
+    def _entropy_from_logits(self, logits: torch.Tensor) -> torch.Tensor:
+        logp = F.log_softmax(logits, dim=-1)   # [B,S,Q]
+        p    = logp.exp()                      # [B,S,Q]
+        ent  = -(p * logp).sum(dim=-1)         # [B,S]
+        return ent.mean(dim=1)                 # [B]
 
     # ---------- API ----------
     def pre_train(self):
@@ -243,31 +273,26 @@ class PPOTrainerTorchRL_Vanilla:
                     if self.args.rescale_value:
                         v_pred = v_pred * self.returns_std + self.returns_mean
 
-                    # vanilla 概率：纯 softmax
-                    probs = F.softmax(logits, dim=-1)  # [mb,S,Q]
-
-                    # new_logp（多分类独立求和）
-                    new_logp = self._log_prob_of(probs, a)
-
+                    # 直接基于 logits 计算 new_logp/entropy（无 softmax 中间张量）
+                    new_logp = self._log_prob_of_logits(logits, a)
                     ratio = torch.exp(new_logp - old_logp)
                     surr1 = ratio * adv_mb
                     surr2 = torch.clamp(ratio, 1 - self.args.clip_eps, 1 + self.args.clip_eps) * adv_mb
                     policy_loss = -torch.min(surr1, surr2).mean()
 
-                    # vanilla 可加熵正则（来自纯 softmax）
-                    ent = self._entropy(probs).mean()
+                    ent = self._entropy_from_logits(logits).mean()
                     value_loss = F.mse_loss(v_pred, ret_mb)
 
-                    # policy step
+                    # policy step（无 retain_graph；只裁剪 policy 子网）
                     self.opt_pi.zero_grad(set_to_none=True)
-                    (policy_loss - self.args.ent_coef * ent).backward(retain_graph=True)
-                    nn.utils.clip_grad_norm_(self.policy.parameters(), self.args.max_grad_norm)
+                    (policy_loss - self.args.ent_coef * ent).backward()
+                    nn.utils.clip_grad_norm_(self.policy.pi.parameters(), self.args.max_grad_norm)
                     self.opt_pi.step()
 
-                    # value step
+                    # value step（只裁剪 value 子网）
                     self.opt_v.zero_grad(set_to_none=True)
                     (self.args.vf_coef * value_loss).backward()
-                    nn.utils.clip_grad_norm_(self.policy.parameters(), self.args.max_grad_norm)
+                    nn.utils.clip_grad_norm_(self.policy.v.parameters(), self.args.max_grad_norm)
                     self.opt_v.step()
 
                     # LR schedule（SB3-style）
@@ -289,53 +314,6 @@ class PPOTrainerTorchRL_Vanilla:
 
             if (epoch + 1) % self.args.eval_every == 0:
                 self.evaluate()
-                # self.print(f"  Eval: return mean {mean_r:.4f} ± {std_r:.4f}")
-
-    # # ---------- internals ----------
-    # @torch.no_grad()
-    # def _rollout(self, env: EnvBase, T: int, B: int) -> Dict[str, torch.Tensor]:
-    #     device = torch.device(self.args.device)
-    #     td = env.reset()
-    #     obs = torch.zeros(T+1, B, self.args.obs_dim, device=device)
-    #     act = torch.zeros(T,   B, self.args.S, self.args.Q, device=device)
-    #     logp= torch.zeros(T,   B, device=device)
-    #     rew = torch.zeros(T,   B, device=device)
-    #     done= torch.zeros(T,   B, device=device)
-    #     val = torch.zeros(T+1, B, device=device)
-    #
-    #     obs[0] = td['obs'].to(device)
-    #     for t in range(T):
-    #         std_o_t = self._standardize_queues(obs[t])
-    #         logits, v = self.policy(std_o_t)
-    #
-    #         if self.args.rescale_value:
-    #             v = v * self.returns_std + self.returns_mean
-    #
-    #         # vanilla 概率：纯 softmax
-    #         probs = F.softmax(logits, dim=-1)  # [B,S,Q]
-    #
-    #         # 随机/贪心
-    #         if self.args.randomize:
-    #             a, lp = self._sample_and_logp(probs)
-    #         else:
-    #             a, lp = self._argmax_and_logp(probs)
-    #
-    #         val[t] = v
-    #         act[t] = a
-    #         logp[t] = lp
-    #
-    #         out = env.step(TensorDict({"action": a.to(env.device)}, batch_size=[B]))
-    #         nxt = out["next"]
-    #         obs[t + 1] = nxt["obs"].to(device)
-    #         rew[t] = nxt["reward"].reshape(B).to(device)
-    #         done[t] = nxt["done"].reshape(B).to(device)
-    #
-    #     std_o_last = self._standardize_queues(obs[-1])
-    #     _, v_last = self.policy(std_o_last)
-    #     if self.args.rescale_value:
-    #         v_last = v_last * self.returns_std + self.returns_mean
-    #     val[-1] = v_last
-    #     return {"obs": obs, "act": act, "logp": logp, "rew": rew, "done": done, "val": val}
 
     @torch.no_grad()
     def _rollout(self, env: EnvBase, T: int, B: int) -> Dict[str, torch.Tensor]:
@@ -357,18 +335,17 @@ class PPOTrainerTorchRL_Vanilla:
             if self.args.rescale_value:
                 v = v * self.returns_std + self.returns_mean
 
-            probs = F.softmax(logits, dim=-1)  # [B,S,Q]
-
+            # 向量化采样/贪心（无 .to(...)）
             if self.args.randomize:
-                a, lp = self._sample_and_logp(probs)
+                a, lp = self._sample_onehot_and_logp(logits)
             else:
-                a, lp = self._argmax_and_logp(probs)
+                a, lp = self._argmax_onehot_and_logp(logits)
 
             val[t] = v
             act[t] = a
             logp[t] = lp
 
-            # **不要再 a.to(env.device)**，env 已在同一 GPU
+            # env 已在同一 GPU；不再 a.to(env.device)
             out = env.step(TensorDict({"action": a}, batch_size=[B]))
             nxt = out["next"]
 
@@ -385,62 +362,6 @@ class PPOTrainerTorchRL_Vanilla:
 
         return {"obs": obs, "act": act, "logp": logp, "rew": rew, "done": done, "val": val}
 
-    def _sample_and_logp(self, probs: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-        B, S, Q = probs.shape
-        a = torch.zeros(B, S, Q, device=probs.device)
-        logp = torch.zeros(B, device=probs.device)
-        for s in range(S):
-            cat = Categorical(probs=probs[:, s, :])
-            idx = cat.sample()                      # [B]
-            a[torch.arange(B), s, idx] = 1.0
-            logp += cat.log_prob(idx)
-        return a, logp
-
-    def _argmax_and_logp(self, probs: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-        B, S, Q = probs.shape
-        idx = probs.argmax(dim=-1)                  # [B,S]
-        a = F.one_hot(idx, num_classes=Q).float()
-        lp = torch.zeros(B, device=probs.device)
-        for s in range(S):
-            cat = Categorical(probs=probs[:, s, :])
-            lp += cat.log_prob(idx[:, s])
-        return a, lp
-
-    def _log_prob_of(self, probs: torch.Tensor, one_hot: torch.Tensor) -> torch.Tensor:
-        idxs = one_hot.argmax(dim=-1)               # [B,S]
-        B, S, _ = one_hot.shape
-        logp = torch.zeros(B, device=probs.device)
-        for s in range(S):
-            cat = Categorical(probs=probs[:, s, :])
-            logp += cat.log_prob(idxs[:, s])
-        return logp
-
-    def _entropy(self, probs: torch.Tensor) -> torch.Tensor:
-        B, S, Q = probs.shape
-        ent = 0.0
-        for s in range(S):
-            cat = Categorical(probs=probs[:, s, :])
-            ent = ent + cat.entropy()
-        return ent / S
-
-    def _lr_step(self):
-        progress = self.update_idx / max(1, self.total_updates - 1)
-        progress_remaining = 1.0 - progress
-        for pg in self.opt_pi.param_groups:
-            pg["lr"] = cosine_with_warmup_sb3_style(self.args.lr_policy, self.args.min_lr_policy,
-                                                    progress_remaining, self.args.warmup)
-        for pg in self.opt_v.param_groups:
-            pg["lr"] = cosine_with_warmup_sb3_style(self.args.lr_value, self.args.min_lr_value,
-                                                    progress_remaining, self.args.warmup)
-        self.update_idx += 1
-
-    def _estimate_total_updates(self) -> int:
-        TnB = self.args.episode_steps * self.args.train_batch
-        mb = max(1, self.args.minibatch_size)
-        steps_per_epoch = math.ceil(TnB / mb) * self.args.ppo_epochs
-        return max(1, steps_per_epoch * self.args.total_epochs)
-
-    # ---------- Behavior Cloning (vanilla) ----------
     # ---------- Behavior Cloning (vanilla) ----------
     def _behavior_cloning(self):
         self.print("[BC] start (vanilla)")
@@ -473,12 +394,12 @@ class PPOTrainerTorchRL_Vanilla:
 
             opt.zero_grad(set_to_none=True)
             loss.backward()
-            nn.utils.clip_grad_norm_(self.policy.parameters(), self.args.max_grad_norm)
+            nn.utils.clip_grad_norm_(self.policy.pi.parameters(), self.args.max_grad_norm)
             opt.step()
 
         self.print("[BC] done")
 
-    # # ---------- Evaluation ----------
+    # ---------- Evaluation ----------
     @torch.no_grad()
     def evaluate(self) -> Tuple[float, float]:
         device = torch.device(self.args.device)
@@ -494,44 +415,44 @@ class PPOTrainerTorchRL_Vanilla:
 
         for _ in range(self.args.eval_T):
             # 标准化仅用于策略前向；统计一律用“右端点 next”
-            obs_raw = td["obs"].to(device)  # [B, obs_dim]
+            obs_raw = td["obs"]  # 已在 GPU
             std_obs = self._standardize_queues(obs_raw)  # [B, obs_dim]
 
-            # 策略动作（vanilla：softmax）
+            # 策略动作（logits → 向量化动作/对数概率）
             logits, v = self.policy(std_obs)
             if self.args.rescale_value:
                 v = v * self.returns_std + self.returns_mean
-            probs = F.softmax(logits, dim=-1)  # [B,S,Q]
-            if self.args.randomize:
-                a, _ = self._sample_and_logp(probs)
-            else:
-                a, _ = self._argmax_and_logp(probs)
 
-            # 环境前进一步（右端点统计）
-            out = self.eval_env.step(TensorDict({"action": a.to(self.eval_env.device)}, batch_size=[B]))
+            if self.args.randomize:
+                a, _ = self._sample_onehot_and_logp(logits)
+            else:
+                a, _ = self._argmax_onehot_and_logp(logits)
+
+            # 环境前进一步（右端点统计）；不再 .to(self.eval_env.device)
+            out = self.eval_env.step(TensorDict({"action": a}, batch_size=[B]))
             nxt = out["next"]
 
             # 奖励累计（保持原有返回）
-            r_t = nxt["reward"].reshape(B).to(device)
+            r_t = nxt["reward"].reshape(B)
             total_r += r_t
 
             # 步长 Δt：优先 event_time；其次 time 差；最后退化为 1
             if "event_time" in nxt.keys():
-                dt = nxt["event_time"].reshape(B).to(device)
+                dt = nxt["event_time"].reshape(B)
             elif "time" in nxt.keys() and "time" in td.keys():
-                dt = (nxt["time"].reshape(B).to(device) - td["time"].reshape(B).to(device)).clamp_min(0)
+                dt = (nxt["time"].reshape(B) - td["time"].reshape(B)).clamp_min(0)
             else:
                 dt = torch.ones(B, device=device)
 
             # 右端点队列（next）
             if "queues" in nxt.keys():
-                queues_next = nxt["queues"][:, :Q].to(device)  # [B,Q]
+                queues_next = nxt["queues"][:, :Q]  # [B,Q]
             else:
-                queues_next = nxt["obs"][:, :Q].to(device)  # [B,Q] 回退
+                queues_next = nxt["obs"][:, :Q]     # [B,Q] 回退
 
             # 右端点 cost（若无 cost 则用 -reward）
             if "cost" in nxt.keys():
-                c_t = nxt["cost"].reshape(B).to(device)
+                c_t = nxt["cost"].reshape(B)
             else:
                 c_t = -r_t
 
@@ -552,66 +473,22 @@ class PPOTrainerTorchRL_Vanilla:
         q_std = qlen_overall_per_env.std(unbiased=True)
         q_se = (q_std / math.sqrt(B)).item()
 
-
-        # 保持原有的 return 统计/返回
-        # ret_mean = total_r.mean().item()
-        # ret_std = total_r.std(unbiased=True).item()
         self.print(f"Eval (B={B}): queue length mean (overall): {q_mean:.4f}")
         self.print(f"se (overall): {q_se:.4f}")
-        # self.print(
-        #     f"  Eval (B={B}): queue length mean (overall): {q_mean:.4f}, SE {q_se:.4f} | "
-        #     f"time-avg cost mean {cost_mean:.4f}, SE {cost_se:.4f}"
-        # )
-        # return ret_mean, ret_std
 
-    # @torch.no_grad()
-    # def evaluate(self) -> Tuple[float, float]:
-    #     td = self.eval_env.reset()  # 已在 GPU
-    #     B, Q = self.args.test_batch, self.args.Q
-    #     device = torch.device(self.args.device)
-    #     total_r = torch.zeros(B, device=device)
-    #     time_weight_queue_len = torch.zeros(B, Q, device=device)
-    #     time_weight_cost = torch.zeros(B, device=self.device)
-    #     time_now = torch.zeros(B, device=self.device)
-    #
-    #     for _ in range(self.args.eval_T):
-    #         obs_raw = td["obs"]  # GPU
-    #         std_obs = self._standardize_queues(obs_raw)
-    #
-    #         logits, v = self.policy(std_obs)
-    #         if self.args.rescale_value:
-    #             v = v * self.returns_std + self.returns_mean
-    #         probs = F.softmax(logits, dim=-1)
-    #         a, _ = (self._sample_and_logp if self.args.randomize else self._argmax_and_logp)(probs)
-    #
-    #         out = self.eval_env.step(TensorDict({"action": a}, batch_size=[B]))
-    #         nxt = out["next"]
-    #
-    #         r_t = nxt["reward"].reshape(B)
-    #         total_r += r_t
-    #
-    #         if "event_time" in nxt.keys():
-    #             dt = nxt["event_time"].reshape(B)
-    #         elif "time" in nxt.keys() and "time" in td.keys():
-    #             dt = (nxt["time"].reshape(B) - td["time"].reshape(B)).clamp_min(0)
-    #         else:
-    #             dt = torch.ones(B, device=self.device)
-    #
-    #         queues_next = (nxt["queues"][:, :Q] if "queues" in nxt.keys() else nxt["obs"][:, :Q])
-    #         c_t = nxt["cost"].reshape(B) if "cost" in nxt.keys() else -r_t
-    #
-    #         time_weight_queue_len += queues_next * dt.view(B, 1)
-    #         time_weight_cost += c_t * dt
-    #         time_now += dt
-    #
-    #         td = nxt
-    #
-    #     qlen_per_env = time_weight_queue_len / time_now.view(B, 1).clamp_min(1e-12)
-    #     qlen_overall_per_env = qlen_per_env.mean(dim=1)
-    #
-    #     q_mean = qlen_overall_per_env.mean().item()
-    #     q_std = qlen_overall_per_env.std(unbiased=True)
-    #     q_se = (q_std / math.sqrt(B)).item()
-    #
-    #     self.print(f"Eval (B={B}): queue length mean (overall): {q_mean:.4f}")
-    #     self.print(f"se (overall): {q_se:.4f}")
+    def _lr_step(self):
+        progress = self.update_idx / max(1, self.total_updates - 1)
+        progress_remaining = 1.0 - progress
+        for pg in self.opt_pi.param_groups:
+            pg["lr"] = cosine_with_warmup_sb3_style(self.args.lr_policy, self.args.min_lr_policy,
+                                                    progress_remaining, self.args.warmup)
+        for pg in self.opt_v.param_groups:
+            pg["lr"] = cosine_with_warmup_sb3_style(self.args.lr_value, self.args.min_lr_value,
+                                                    progress_remaining, self.args.warmup)
+        self.update_idx += 1
+
+    def _estimate_total_updates(self) -> int:
+        TnB = self.args.episode_steps * self.args.train_batch
+        mb = max(1, self.args.minibatch_size)
+        steps_per_epoch = math.ceil(TnB / mb) * self.args.ppo_epochs
+        return max(1, steps_per_epoch * self.args.total_epochs)
