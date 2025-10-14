@@ -62,6 +62,7 @@ def load_rl_env(seed, batch):
         queue_event_options=queue_event_options,
         queue_event_options2=queue_event_options2,
         time_f=time_f,
+        reentrant=reentrant
     ))
     # env.reset()
     # print(td)
@@ -287,6 +288,7 @@ if __name__ == "__main__":
     env_temp = policy_config['env']['env_temp']
     randomize = policy_config['env']['randomize']
     time_f = policy_config['env']['time_f']
+    reentrant = policy_config['env']['reentrant']
 
     # training hyperparameters
     # actors = policy_config['training']['actors']

@@ -34,7 +34,7 @@ ps -p 675763 -o pid,cmd
 
 scp -r jf5524@greene.hpc.nyu.edu:/scratch/jf5524/QGymGPU/results/cla/ .
 scp -r jf5524@greene.hpc.nyu.edu:/scratch/jf5524/QGymGPU/results/rl/ .
-scp -r jf5524@greene.hpc.nyu.edu:/scratch/jf5524/QGym/results/rl/ .
+scp -r jf5524@greene.hpc.nyu.edu:/scratch/jf5524/QGym/results/cla/ .
 
 查看自己所有作业
 squeue -u $USER
@@ -42,3 +42,6 @@ squeue -u $USER
 scontrol show job 1761408
 查看作业输出内容
 cat slurm-741884.out
+
+删除当前文件夹下所有文件
+rm -rf ./*

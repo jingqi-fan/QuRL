@@ -6,8 +6,8 @@ mu: [[0.5,0.5,0.5,0.,0.,0.], [0., 0.,0.,0.5,0.5,1.]]
 h: [1,1,1,1,1,1]
 init_queues: [0,0,0,0,0,0]
 queue_event_options: 'custom'
-train_T: 500
-test_T: 500
+train_T: 5000
+test_T: 5000
 num_pool: 1
 queue_event_options2: 'custom'
 reentrant: 1

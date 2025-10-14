@@ -125,6 +125,13 @@ if env_config['queue_event_options'] == 'custom':
 if type(env_config['queue_event_options']) == list:
     env_config['queue_event_options'] = torch.tensor(env_config['queue_event_options']).float()
 
+if env_config['queue_event_options2'] == 'custom':
+    if env_config['lam_type'] == 'hyper':
+        env_config['queue_event_options2'] = torch.tensor(np.load(f'configs/env_data/{env_config["env_type"]}/{env_config["env_type"]}_delta2.npy'))
+    else:
+        env_config['queue_event_options2'] = torch.tensor(np.load(f'configs/env_data/{name}/{name}_delta2.npy'))
+if type(env_config['queue_event_options2']) == list:
+    env_config['queue_event_options2'] = torch.tensor(env_config['queue_event_options2']).float()
 
 def draw_service(env, time: torch.Tensor) -> torch.Tensor:
     """

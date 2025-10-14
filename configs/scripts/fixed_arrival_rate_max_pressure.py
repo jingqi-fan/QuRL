@@ -76,7 +76,13 @@ else:
     env_config['server_pool_size'] = torch.ones(orig_s).to(model_config['env']['device'])
 
 
-
+if env_config['queue_event_options2'] == 'custom':
+    if env_config['lam_type'] == 'hyper':
+        env_config['queue_event_options2'] = torch.tensor(np.load(f'configs/env_data/{env_config["env_type"]}/{env_config["env_type"]}_delta2.npy'))
+    else:
+        env_config['queue_event_options2'] = torch.tensor(np.load(f'configs/env_data/{name}/{name}_delta2.npy'))
+if type(env_config['queue_event_options2']) == list:
+    env_config['queue_event_options2'] = torch.tensor(env_config['queue_event_options2']).float()
 
 lam_type = env_config['lam_type']
 lam_params = env_config['lam_params']

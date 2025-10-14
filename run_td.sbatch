@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH -J qgym_gpu_rl
+#SBATCH -J qgym_gpu_td_n_model
 #SBATCH -o slurm-%j.out
 #SBATCH --time=05:00:00
 #SBATCH --ntasks=1
@@ -69,25 +69,21 @@ run() {
 }
 
 # ====== 串行跑多个实验（不需要 srun）======
-run cmu          en_model_mm_5
-run cmuq         en_model_mm_5
-run max_pressure en_model_mm_5
+run cmu          n_model_mm_10
+run cmuq         n_model_mm_10
+run max_pressure n_model_mm_10
 
-run cmu          en_model_mm_10
-run cmuq         en_model_mm_10
-run max_pressure en_model_mm_10
+run cmu          n_model_mm_50
+run cmuq         n_model_mm_50
+run max_pressure n_model_mm_50
 
-run cmu          en_model_mm_50
-run cmuq         en_model_mm_50
-run max_pressure en_model_mm_50
+run cmu          n_model_mm_100
+run cmuq         n_model_mm_100
+run max_pressure n_model_mm_100
 
-run cmu          en_model_mm_100
-run cmuq         en_model_mm_100
-run max_pressure en_model_mm_100
-
-run cmu          en_model_mm_200
-run cmuq         en_model_mm_200
-run max_pressure en_model_mm_200
+run cmu          n_model_mm_200
+run cmuq         n_model_mm_200
+run max_pressure n_model_mm_200
 
 # 如果以后要并行跑（同一作业里开多个进程），改成：
 # srun --exclusive -N1 -n1 bash -lc 'cd "$PROJ" && '"$PY"' -m main.run_comparison cmu  n_model_mm_50' &
