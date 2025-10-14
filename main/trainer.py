@@ -45,12 +45,14 @@ class Trainer:
             self.env_config['mu'],
             torch.tensor(self.env_config['h']).float(),
             queue_event_options=self.env_config.get('queue_event_options', None),
+            queue_event_options2=self.env_config.get('queue_event_options2', None),
             default_B=B_train,
             temp=self.model_config['env']['env_temp'],
             seed=self.model_config['env']['train_seed'],
             device=self.device,
             draw_service=self.draw_service,
             draw_inter_arrivals=self.draw_inter_arrivals,
+            reentrant=self.env_config.get('reentrant', 0)
         )
 
         # reset（用 gen_params 指定 batch 维）
@@ -154,12 +156,14 @@ class Trainer:
             self.env_config['mu'],
             torch.tensor(self.env_config['h']).float(),
             queue_event_options=self.env_config.get('queue_event_options', None),
+            queue_event_options2=self.env_config.get('queue_event_options2', None),
             default_B=B_test,
             temp=self.model_config['env']['env_temp'],
             seed=self.model_config['env']['test_seed'],
             device=self.device,
             draw_service=self.draw_service,
             draw_inter_arrivals=self.draw_inter_arrivals,
+            reentrant=self.env_config.get('reentrant', 0)
         )
 
         td = dq.reset(dq.gen_params(batch_size=[B_test]))

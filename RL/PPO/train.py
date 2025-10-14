@@ -60,6 +60,7 @@ def load_rl_env(seed, batch):
         seed=seed,
         default_B=batch,
         queue_event_options=queue_event_options,
+        queue_event_options2=queue_event_options2,
         time_f=time_f,
     ))
     # env.reset()
@@ -246,6 +247,17 @@ if __name__ == "__main__":
             queue_event_options = torch.tensor(np.load(queue_event_options_path))
         else:
             queue_event_options = torch.tensor(queue_event_options)
+
+    queue_event_options2 = env_config["queue_event_options2"]
+    if queue_event_options2 is not None:
+        if queue_event_options2 == "custom":
+            queue_event_options_path = os.path.join(
+                project_root, "configs", "env_data", env_type, f"{env_type}_delta2.npy"
+            )
+            queue_event_options2 = torch.tensor(np.load(queue_event_options_path))
+        else:
+            queue_event_options2 = torch.tensor(queue_event_options2)
+
 
     if lam_params["val"] is None:
         lam_r_path = os.path.join(
