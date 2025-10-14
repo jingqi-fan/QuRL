@@ -1,6 +1,8 @@
 # main/run_comparison.py
 import argparse
 import os
+import sys
+import shlex
 import time
 import subprocess
 import re
@@ -93,12 +95,19 @@ def main():
     csvfile = os.path.join(args.logs_dir, "exp.csv")
     timestamp = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
 
-    # 运行命令
-    command = f"python {script_path} -m={args.model} -e={env_file} -experiment_name={experiment_name}"
+    # 运行命令 —— 用当前解释器 + 无缓冲
+    py = shlex.quote(sys.executable)       # 保证是你当前conda里的python
+    cmd_script = shlex.quote(script_path)
+    command = f"{py} -u {cmd_script} -m={args.model} -e={env_file} -experiment_name={experiment_name}"
     print(f"[INFO] Running: {command}")
 
     metrics = {k: None for k in METRIC_PATTERNS.keys()}
     start_time = time.time()
+
+    # 传递环境变量，确保无缓冲与UTF-8
+    env = os.environ.copy()
+    env["PYTHONUNBUFFERED"] = "1"
+    env["PYTHONIOENCODING"] = "utf-8"
 
     proc = subprocess.Popen(
         command,
@@ -108,6 +117,7 @@ def main():
         text=True,
         bufsize=1,
         universal_newlines=True,
+        env=env,
     )
     try:
         for line in iter(proc.stdout.readline, ''):
@@ -125,9 +135,15 @@ def main():
         proc.wait()
 
     elapsed = time.time() - start_time
-    print(f"[DONE] {command} finished in {elapsed:.2f} seconds")
+    print(f"[DONE] {command} finished in {elapsed:.2f} seconds (rc={proc.returncode})")
 
-    # 写 CSV
+    # 子进程失败则不要写入 CSV，直接退出（避免脏数据）
+    if proc.returncode != 0:
+        print("[ERROR] Child process failed. Skip logging to CSV. "
+              "Likely wrong python env before this fix; ensure torch is importable.")
+        sys.exit(proc.returncode)
+
+    # 写 CSV（只有当子进程成功时）
     append_csv_row(csvfile, {
         "timestamp": timestamp,
         "experiment_name": experiment_name,
