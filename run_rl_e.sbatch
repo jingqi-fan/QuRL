@@ -54,19 +54,19 @@ warn(){ echo "[WARN] $*" >&2; }
 info(){ echo "[INFO] $*"; }
 
 run() {
-  local script_key="$1"
-  local env_stub="$2"
-  info "START $(date +'%F %T')  CWD=$(pwd)  run: ${script_key} ${env_stub}"
-  # 关键：切回项目根再跑，确保相对路径可用
+  local env_stub="$1"   # 例如: vanilla_bc.yaml
+  local tag="$2"        # 例如: en_model_mm_200
+  info "START $(date +'%F %T')  CWD=$(pwd)  run: ${env_stub} ${tag}"
+  # 回到项目根，保证相对路径正确
   ( cd "$PROJ" && \
-    "$PY" -m RL.PPO.train "${script_key}" "${env_stub}" \
-      # 如需显式传绝对路径，也可以取消注释这三行：
-      # --scripts_dir "${PROJ}/configs/scripts" \
+    "$PY" -m RL.PPO.train "${env_stub}" "${tag}" \
+      # 如需显式传绝对路径，可在 RL.PPO.train 支持的前提下加：
       # --envs_dir    "${PROJ}/configs/env" \
       # --logs_dir    "${PROJ}/results/cla"
-  ) || warn "experiment failed: ${script_key} ${env_stub}"
-  info "END   $(date +'%F %T')  run: ${script_key} ${env_stub}"
+  ) || warn "experiment failed: ${env_stub} ${tag}"
+  info "END   $(date +'%F %T')  run: ${env_stub} ${tag}"
 }
+
 
 # ====== 串行跑多个实验（不需要 srun）======
 run WC.yaml          en_model_mm_10

@@ -52,6 +52,7 @@ data = {
     "h": h,
     "init_queues": init_queues,
     "queue_event_options": None,
+    "queue_event_options2": None,
     "train_T": train_T,
     "test_T": test_T,
     "num_pool": 1,
