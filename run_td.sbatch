@@ -101,8 +101,8 @@ run() {
 #run cmuq         en_model_mm_200
 #run max_pressure en_model_mm_200
 #
-#run cmu          reentrant_2
-#run cmuq         reentrant_2
+run cmu          reentrant_2
+run cmuq         reentrant_2
 run max_pressure reentrant_2
 
 # 如果以后要并行跑（同一作业里开多个进程），改成：
