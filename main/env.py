@@ -78,6 +78,7 @@ class BatchedDiffDES(EnvBase):
         self.event_map_full = torch.cat([arrive_map, leave_map_expanded], dim=0).to(self.device)
 
         if reentrant == 1:
+            print(f'1')
             self.queue_event_options2 = queue_event_options2.to(self.device).float()
             # 生成 event_map_full：包含到达事件 + J 个完成事件
             # queue_event_options2 形状 [2Q, Q]，前 Q 行 +1，后 Q 行 -1
