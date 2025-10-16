@@ -79,7 +79,10 @@ class BatchedDiffDES(EnvBase):
 
         if reentrant == 1:
             print(f'1')
-            self.queue_event_options2 = queue_event_options2.to(self.device).float()
+            # self.queue_event_options2 = queue_event_options2.to(self.device).float()
+            self.queue_event_options2 = torch.as_tensor(
+                queue_event_options2, dtype=torch.float32, device=self.device
+            )
             # 生成 event_map_full：包含到达事件 + J 个完成事件
             # queue_event_options2 形状 [2Q, Q]，前 Q 行 +1，后 Q 行 -1
             arrive_map2 = self.queue_event_options2[: self.Q]  # [Q, Q]
