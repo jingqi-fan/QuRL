@@ -288,7 +288,7 @@ if __name__ == "__main__":
     env_temp = policy_config['env']['env_temp']
     randomize = policy_config['env']['randomize']
     time_f = policy_config['env']['time_f']
-    reentrant = policy_config['env'].get('reentrant', 0)
+    reentrant = env_config.get('reentrant', 0)
 
     # training hyperparameters
     # actors = policy_config['training']['actors']
