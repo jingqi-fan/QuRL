@@ -23,11 +23,11 @@ training:
   var_scaler: 1.0
   per_iter_normal_obs: False
   per_iter_normal_value: False
-  actors: 50
+  actors: 10
   episode_steps: 256
   num_epochs: 50
-  train_batch: 50
-  test_batch: 50
+  train_batch: 10
+  test_batch: 10
   lr: 0.0003
   lr_policy: 0.0009
   lr_value: 0.0003

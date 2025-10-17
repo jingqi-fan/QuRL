@@ -2,10 +2,10 @@ import yaml
 import random
 
 # ---------- 配置（硬编码） ----------
-N = 5
-train_T = 10
-test_T = 10
-p_conn = 1  # network 联通(1)的概率；不联通(0)概率=0.3
+N = 10
+train_T = 5000
+test_T = 5000
+p_conn = 0.5  # network 联通(1)的概率；不联通(0)概率=0.3
 
 random.seed(42)  # 如不需要确定性，可删除
 
@@ -33,14 +33,14 @@ network = FlowList([
 # ---------- 生成 mu（与 network 对应） ----------
 # 若 network[i][j] == 0 -> mu[i][j] = 0
 # 若 network[i][j] == 1 -> mu[i][j] ~ U(0,1)
-# mu = FlowList([
-#     FlowList([random.random() if network[i][j] == 1 else 0 for j in range(N)])
-#     for i in range(N)
-# ])
 mu = FlowList([
-    FlowList([random.uniform(0.001, 2.0) if network[i][j] == 1 else 0 for j in range(N)])
+    FlowList([random.random() if network[i][j] == 1 else 0 for j in range(N)])
     for i in range(N)
 ])
+# mu = FlowList([
+#     FlowList([random.uniform(0.001, 2.0) if network[i][j] == 1 else 0 for j in range(N)])
+#     for i in range(N)
+# ])
 
 # ---------- 其他字段 ----------
 lam_val = FlowList([random.uniform(0.001, 1.0) for _ in range(N)])
@@ -63,7 +63,7 @@ data = {
 }
 
 # ---------- 输出（顶层块状，内部矩阵单行） ----------
-output_path = f"../env/n_model_mm_{N}.yaml"
+output_path = f"../env/en_model_mm_{N}.yaml"
 with open(output_path, "w", encoding="utf-8") as f:
     yaml.dump(
         data,
