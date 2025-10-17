@@ -33,13 +33,17 @@ network = FlowList([
 # ---------- 生成 mu（与 network 对应） ----------
 # 若 network[i][j] == 0 -> mu[i][j] = 0
 # 若 network[i][j] == 1 -> mu[i][j] ~ U(0,1)
+# mu = FlowList([
+#     FlowList([random.random() if network[i][j] == 1 else 0 for j in range(N)])
+#     for i in range(N)
+# ])
 mu = FlowList([
-    FlowList([random.random() if network[i][j] == 1 else 0 for j in range(N)])
+    FlowList([random.uniform(0.001, 2.0) if network[i][j] == 1 else 0 for j in range(N)])
     for i in range(N)
 ])
 
 # ---------- 其他字段 ----------
-lam_val = FlowList([random.uniform(0.001, 2.0) for _ in range(N)])
+lam_val = FlowList([random.uniform(0.001, 1.0) for _ in range(N)])
 h = FlowList([random.random() for _ in range(N)])
 init_queues = FlowList([0 for _ in range(N)])
 
