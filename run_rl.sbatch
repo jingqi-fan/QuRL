@@ -69,10 +69,10 @@ run() {
 
 
 # ====== 串行跑多个实验（不需要 srun）======
-run WC.yaml          n_model_10
-run WC.yaml          n_model_50
-run WC.yaml          n_model_100
-run WC.yaml          n_model_200
+run WC.yaml          n_model_mm_10
+run WC.yaml          n_model_mm_50
+run WC.yaml          n_model_mm_100
+run WC.yaml          n_model_mm_200
 
 #run pathwise.yaml          n_model_10
 #run pathwise.yaml          n_model_50
