@@ -156,27 +156,60 @@ class PathwiseTrainerTorchRL:
         return self._discounts
 
     # ====== WC-Softmax（更稳的 masked logsumexp 写法；改进点 2） ======
+    # def _wc_softmax(self, logits: torch.Tensor, obs: torch.Tensor, tau: float, eps: float = 1e-8) -> torch.Tensor:
+    #     """
+    #     numerator/denominator 通过对不可行位置置 -inf，再 log_softmax 得到；
+    #     若某行全不可行，回退为网络掩码上的均匀分布（避免 NaN）。
+    #     """
+    #     B, S, Q = logits.shape
+    #     pos_mask = (obs[:, :Q] > 0).unsqueeze(1)                    # [B,1,Q] (bool)
+    #     net_mask = (self.net_mask > 0).to(logits.device).unsqueeze(0)  # [1,S,Q] (bool)
+    #     feas = pos_mask & net_mask                                   # [B,S,Q] (bool)
+    #
+    #     scaled = logits / max(tau, 1e-6)
+    #     neg_inf = torch.finfo(logits.dtype).min
+    #     masked = torch.where(feas, scaled, torch.tensor(neg_inf, device=logits.device, dtype=logits.dtype))
+    #     logp = F.log_softmax(masked, dim=-1)                         # [B,S,Q]
+    #     p = logp.exp()                                                # [B,S,Q]
+    #
+    #     # 行全不可行时（和为0），回退到网络掩码均匀分布
+    #     row_sum = p.sum(dim=-1, keepdim=True)                        # [B,S,1]
+    #     fallback = net_mask.float() / net_mask.float().sum(dim=-1, keepdim=True).clamp_min(1.0)  # [1,S,1]→[1,S,1]
+    #     fallback = fallback.expand_as(p)
+    #     return torch.where(row_sum > 0, p, fallback)
+
     def _wc_softmax(self, logits: torch.Tensor, obs: torch.Tensor, tau: float, eps: float = 1e-8) -> torch.Tensor:
-        """
-        numerator/denominator 通过对不可行位置置 -inf，再 log_softmax 得到；
-        若某行全不可行，回退为网络掩码上的均匀分布（避免 NaN）。
-        """
+
         B, S, Q = logits.shape
-        pos_mask = (obs[:, :Q] > 0).unsqueeze(1)                    # [B,1,Q] (bool)
-        net_mask = (self.net_mask > 0).to(logits.device).unsqueeze(0)  # [1,S,Q] (bool)
-        feas = pos_mask & net_mask                                   # [B,S,Q] (bool)
+        device = logits.device
+        dtype = logits.dtype
 
+        # —— 1) 可行域：网络掩码 ∧ 队列非空（work-conserving 的关键）
+        net_mask = (self.net_mask > 0).to(device)  # [S, Q] bool
+        net_mask = net_mask.unsqueeze(0).expand(B, S, Q)  # [B, S, Q]
+        pos_mask = (obs[:, :Q] > 0).to(device).to(torch.bool)  # [B, Q]
+        pos_mask = pos_mask.unsqueeze(1).expand(B, S, Q)  # [B, S, Q]
+        feas = net_mask & pos_mask  # [B, S, Q] 仅“网络可行且队列>0”的位置为 True
+
+        # —— 2) softmax(logits / tau)（温度缩放）
         scaled = logits / max(tau, 1e-6)
-        neg_inf = torch.finfo(logits.dtype).min
-        masked = torch.where(feas, scaled, torch.tensor(neg_inf, device=logits.device, dtype=logits.dtype))
-        logp = F.log_softmax(masked, dim=-1)                         # [B,S,Q]
-        p = logp.exp()                                                # [B,S,Q]
+        p = F.softmax(scaled, dim=-1)  # [B, S, Q]
 
-        # 行全不可行时（和为0），回退到网络掩码均匀分布
-        row_sum = p.sum(dim=-1, keepdim=True)                        # [B,S,1]
-        fallback = net_mask.float() / net_mask.float().sum(dim=-1, keepdim=True).clamp_min(1.0)  # [1,S,1]→[1,S,1]
-        fallback = fallback.expand_as(p)
-        return torch.where(row_sum > 0, p, fallback)
+        # —— 3) 将不可行位置置 0（空队列直接 0 概率 → 不分配到空队列）
+        p = p * feas.float()  # [B, S, Q]
+
+        # —— 4) 行级回退：若某行全 0，则在“网络掩码”上均匀（与 wc 实现一致的 fallback）
+        row_sum = p.sum(dim=-1, keepdim=True)  # [B, S, 1]
+        need_fallback = (row_sum <= eps)  # 没有任何可行动作
+        if need_fallback.any():
+            # 注意：这里用“网络掩码”均匀，而不是用 feas；当所有队列为空时，这是唯一稳定选择
+            net_mask_f = net_mask.float()
+            fallback = net_mask_f / net_mask_f.sum(dim=-1, keepdim=True).clamp_min(1.0)  # [B,S,Q] 行均匀
+            p = torch.where(need_fallback, fallback, p)
+
+        # —— 5) 归一化（防数值问题）
+        p = p / p.sum(dim=-1, keepdim=True).clamp_min(1e-12)
+        return p
 
     # ====== Policy/Value 前向（含可选 value 反标尺） ======
     def _pi_v(self, obs: torch.Tensor):
