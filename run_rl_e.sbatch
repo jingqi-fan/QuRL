@@ -69,25 +69,30 @@ run() {
 
 
 # ====== 串行跑多个实验（不需要 srun）======
-run WC.yaml          en_model_mm_10
-run WC.yaml          en_model_mm_50
-run WC.yaml          en_model_mm_100
-run WC.yaml          en_model_mm_200
+#run WC.yaml          en_model_mm_10
+#run WC.yaml          en_model_mm_50
+#run WC.yaml          en_model_mm_100
+#run WC.yaml          en_model_mm_200
 
 run pathwise.yaml          en_model_10
 run pathwise.yaml          en_model_50
 run pathwise.yaml          en_model_100
-run pathwise.yaml          en_model_200
 #
 run vanilla.yaml          en_model_10
 run vanilla.yaml          en_model_50
 run vanilla.yaml          en_model_100
-run vanilla.yaml          en_model_200
 #
 run vanilla_bc.yaml          en_model_10
 run vanilla_bc.yaml          en_model_50
 run vanilla_bc.yaml          en_model_100
+
+
+
+
+run pathwise.yaml          en_model_200
+run vanilla.yaml          en_model_200
 run vanilla_bc.yaml          en_model_200
+run WC.yaml          en_model_mm_200
 
 # 如果以后要并行跑（同一作业里开多个进程），改成：
 # srun --exclusive -N1 -n1 bash -lc 'cd "$PROJ" && '"$PY"' -m main.run_comparison cmu  en_model_mm_50' &
