@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH -J qgym_gpu_rl_n_model
 #SBATCH -o slurm-%j.out
-#SBATCH --time=10:00:00
+#SBATCH --time=8:00:00
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=64G
@@ -69,10 +69,10 @@ run() {
 
 
 # ====== 串行跑多个实验（不需要 srun）======
-run WC.yaml          n_model_10
-run WC.yaml          n_model_50
-run WC.yaml          n_model_100
-run WC.yaml          n_model_200
+#run WC.yaml          n_model_10
+#run WC.yaml          n_model_50
+#run WC.yaml          n_model_100
+#run WC.yaml          n_model_200
 
 #run pathwise.yaml          n_model_mm_10
 #run pathwise.yaml          n_model_mm_50
@@ -88,6 +88,12 @@ run WC.yaml          n_model_200
 #run vanilla_bc.yaml          n_model_mm_50
 #run vanilla_bc.yaml          n_model_mm_100
 #run vanilla_bc.yaml          n_model_mm_200
+
+
+run vanilla.yaml          en_model_10
+run vanilla.yaml          en_model_50
+run vanilla.yaml          en_model_100
+run vanilla.yaml          en_model_200
 
 # 如果以后要并行跑（同一作业里开多个进程），改成：
 # srun --exclusive -N1 -n1 bash -lc 'cd "$PROJ" && '"$PY"' -m main.run_comparison cmu  n_model_mm_50' &
