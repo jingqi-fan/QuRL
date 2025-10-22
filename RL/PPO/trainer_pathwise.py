@@ -327,18 +327,21 @@ class PathwiseTrainerTorchRL:
             total_r += r_t
 
             # 步长 Δt：event_time > time 差分 > 1
-            if "event_time" in nxt.keys():
-                dt = nxt["event_time"].reshape(B)
-            elif "time" in nxt.keys() and "time" in td.keys():
-                dt = (nxt["time"].reshape(B) - td["time"].reshape(B)).clamp_min(0)
-            else:
-                dt = torch.ones(B, device=device)
-
-            # 右端点队列：优先 next["queues"]，否则从 next["obs"] 取前 Q 维
-            if "queues" in nxt.keys():
-                queues_next = nxt["queues"][:, :Q]  # [B,Q]
-            else:
-                queues_next = nxt["obs"][:, :Q]     # [B,Q]
+            dt = nxt["event_time"].reshape(B)
+            queues_next = nxt["obs"][:, :Q]     # [B,Q]
+            # print(f'queue next {queues_next}, shap {queues_next.shape}')
+            # if "event_time" in nxt.keys():
+            #     dt = nxt["event_time"].reshape(B)
+            # elif "time" in nxt.keys() and "time" in td.keys():
+            #     dt = (nxt["time"].reshape(B) - td["time"].reshape(B)).clamp_min(0)
+            # else:
+            #     dt = torch.ones(B, device=device)
+            #
+            # # 右端点队列：优先 next["queues"]，否则从 next["obs"] 取前 Q 维
+            # if "queues" in nxt.keys():
+            #     queues_next = nxt["queues"][:, :Q]  # [B,Q]
+            # else:
+            #     queues_next = nxt["obs"][:, :Q]     # [B,Q]
 
             # —— 时间积分累计
             time_weight_queue_len += queues_next * dt.view(B, 1)  # [B,Q]

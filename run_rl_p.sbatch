@@ -90,10 +90,13 @@ run() {
 #run vanilla_bc.yaml          n_model_mm_200
 
 
-run vanilla.yaml          en_model_mm_10
-run vanilla.yaml          en_model_mm_50
-run vanilla.yaml          en_model_mm_100
-run vanilla.yaml          en_model_mm_200
+#run vanilla.yaml          en_model_mm_10
+#run vanilla.yaml          en_model_mm_50
+#run vanilla.yaml          en_model_mm_100
+#run vanilla.yaml          en_model_mm_200
+
+
+run vanilla_bc.yaml  reentrant_2
 
 # 如果以后要并行跑（同一作业里开多个进程），改成：
 # srun --exclusive -N1 -n1 bash -lc 'cd "$PROJ" && '"$PY"' -m main.run_comparison cmu  n_model_mm_50' &

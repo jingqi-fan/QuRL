@@ -641,19 +641,21 @@ class PPOTrainerTorchRL:
             total_r += r_t
 
             # 右端点：使用 next 的队列
-            if "queues" in nxt.keys():
-                queues_next = nxt["queues"][:, :Q].to(device)  # [B,Q]
-            else:
-                # 若环境未显式提供 queues，就从 next.obs 里取前 Q 维
-                queues_next = nxt["obs"][:, :Q].to(device)
-
-            # 步长 Δt：优先 next.event_time，其次用 time 差，最后退化为 1
-            if "event_time" in nxt.keys():
-                dt = nxt["event_time"].reshape(B).to(device)  # [B]
-            elif "time" in nxt.keys() and "time" in td.keys():
-                dt = (nxt["time"].reshape(B).to(device) - td["time"].reshape(B).to(device)).clamp_min(0)
-            else:
-                dt = torch.ones(B, device=device)
+            queues_next = nxt["obs"][:, :Q].to(device)
+            dt = nxt["event_time"].reshape(B).to(device)  # [B]
+            # if "queues" in nxt.keys():
+            #     queues_next = nxt["queues"][:, :Q].to(device)  # [B,Q]
+            # else:
+            #     # 若环境未显式提供 queues，就从 next.obs 里取前 Q 维
+            #     queues_next = nxt["obs"][:, :Q].to(device)
+            #
+            # # 步长 Δt：优先 next.event_time，其次用 time 差，最后退化为 1
+            # if "event_time" in nxt.keys():
+            #     dt = nxt["event_time"].reshape(B).to(device)  # [B]
+            # elif "time" in nxt.keys() and "time" in td.keys():
+            #     dt = (nxt["time"].reshape(B).to(device) - td["time"].reshape(B).to(device)).clamp_min(0)
+            # else:
+            #     dt = torch.ones(B, device=device)
 
             # 时间积分：与之前 test_epoch 完全一致的形式
             time_weight_queue_len += queues_next * dt.view(B, 1)  # [B,Q]

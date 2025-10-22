@@ -38,14 +38,14 @@ scp -r jf5524@greene.hpc.nyu.edu:/scratch/jf5524/QGymGPU/results/rl/ .
 1017_1258_pathwise.yaml_en_model_mm_200.yaml
 1017_1257_WC.yaml_en_model_mm_200.yaml
 
-scp -r jf5524@greene.hpc.nyu.edu:/scratch/jf5524/QGym/results/ .
+scp -r jf5524@greene.hpc.nyu.edu:/scratch/jf5524/QGym/results/cla .
 
 查看自己所有作业
 squeue -u $USER
 查看某作业详情
 scontrol show job 1761408
 查看作业输出内容
-cat slurm-1092042.out
+cat slurm-1123751.out
 
 删除当前文件夹下所有文件
 rm -rf ./*

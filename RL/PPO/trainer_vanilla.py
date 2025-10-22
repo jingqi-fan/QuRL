@@ -437,24 +437,27 @@ class PPOTrainerTorchRL_Vanilla:
             total_r += r_t
 
             # 步长 Δt：优先 event_time；其次 time 差；最后退化为 1
-            if "event_time" in nxt.keys():
-                dt = nxt["event_time"].reshape(B)
-            elif "time" in nxt.keys() and "time" in td.keys():
-                dt = (nxt["time"].reshape(B) - td["time"].reshape(B)).clamp_min(0)
-            else:
-                dt = torch.ones(B, device=device)
+            dt = nxt["event_time"].reshape(B)
+            queues_next = nxt["obs"][:, :Q]  # [B,Q]
+            c_t = -r_t
+            # if "event_time" in nxt.keys():
+            #     dt = nxt["event_time"].reshape(B)
+            # elif "time" in nxt.keys() and "time" in td.keys():
+            #     dt = (nxt["time"].reshape(B) - td["time"].reshape(B)).clamp_min(0)
+            # else:
+            #     dt = torch.ones(B, device=device)
+            #
+            # # 右端点队列（next）
+            # if "queues" in nxt.keys():
+            #     queues_next = nxt["queues"][:, :Q]  # [B,Q]
+            # else:
+            #     queues_next = nxt["obs"][:, :Q]     # [B,Q] 回退
 
-            # 右端点队列（next）
-            if "queues" in nxt.keys():
-                queues_next = nxt["queues"][:, :Q]  # [B,Q]
-            else:
-                queues_next = nxt["obs"][:, :Q]     # [B,Q] 回退
-
-            # 右端点 cost（若无 cost 则用 -reward）
-            if "cost" in nxt.keys():
-                c_t = nxt["cost"].reshape(B)
-            else:
-                c_t = -r_t
+            # # 右端点 cost（若无 cost 则用 -reward）
+            # if "cost" in nxt.keys():
+            #     c_t = nxt["cost"].reshape(B)
+            # else:
+            #     c_t = -r_t
 
             # —— 时间积分累计
             time_weight_queue_len += queues_next * dt.view(B, 1)  # [B,Q]
