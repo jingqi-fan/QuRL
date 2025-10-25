@@ -1,0 +1,61 @@
+name: 'PPO'
+env:
+  device: 'cuda'
+  env_temp: 1.0
+  straight_through_min: False
+  model_seed: 100
+  test_seed: 42
+  train_seed: 3003
+  randomize: True
+  time_f: False
+  reward_scale: 1.0          # 如环境回报量级偏大，可再降到 0.1~0.5
+model:
+  policy_name: "WC"
+  scale: 3                   # 从 10 ↓ 到 3，减小 logits/价值的初始幅度，抑制爆梯度
+training:
+  behavior_cloning: False
+  normalize_advantage: True
+  normalize_value: True
+  normalize_reward: True
+  rescale_v: False           # 已经 normalize_value，再做 rescale_v 容易两头作用，不稳定
+  truncation: True
+  amp_value: False
+  var_scaler: 1.0
+  per_iter_normal_obs: False
+  per_iter_normal_value: False
+  actors: 50
+  episode_steps: 256
+  num_epochs: 50
+  train_batch: 50
+  test_batch: 50
+
+  # --- 关键改动 ---
+  lr: 0.00025               # 总学习率（如未用单独 head 学习率时）
+  lr_policy: 0.0003         # 从 9e-4 ↓ 到 3e-4（必要时再降到 1e-4）
+  lr_value: 0.00025
+  min_lr_policy: 0.00001
+  min_lr_value: 0.00001
+
+  gae_lambda: 0.97          # 从 0.99 ↓，降低优势估计方差
+  gamma: 0.99               # 从 0.998 ↓，减少长时方差/爆梯度风险
+  target_kl: 0.015          # 从 0.03 ↓，更早早停（请确认代码里确实生效）
+
+  vf_coef: 0.5              # 降低 value loss 权重，防止价值头主导更新引起不稳定
+  batch_size: 2048
+  ppo_epochs: 4
+
+#  clip_range: 0.15          # ✨ 新增：策略裁剪（若实现名为 clip_epsilon/clip_param，请映射）
+  clip_range_vf: 0.2        # 原本为 null，建议开启 value 裁剪
+  ent_coef: 0.003           # 从 0.01 ↓，减小探索噪声，避免策略太发散
+
+#  max_grad_norm: 0.7        # ✨ 新增：全局梯度裁剪（0.5~1.0 均可）
+  optimizer: 'adamw'        # 若支持，用 adamw 更稳
+  adam_eps: 1e-5            # 适当调大 eps（若可配置），提升数值稳健
+
+policy:
+  test_policy: 'softmax'
+plot:
+  plot_policy_curve: True
+  inds: [0,1]
+  val_inds: [0, 0]
+checkpoint: null

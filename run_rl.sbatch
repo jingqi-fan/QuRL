@@ -75,7 +75,7 @@ run() {
 #run WC.yaml          n_model_mm_200
 
 
-run WC.yaml          reentrant_2
+run WC1.yaml          n_model_mm_200
 
 #run pathwise.yaml          n_model_10
 #run pathwise.yaml          n_model_50
