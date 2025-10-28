@@ -218,10 +218,6 @@ if __name__ == "__main__":
     else:
         env_type = env_name
 
-    print("\n========== Policy Config ==========")
-    pprint(policy_config)
-    print("===================================")
-
     # 从 env 中读取
     if env_config["network"] is None:
         network_path = os.path.join(
@@ -345,11 +341,16 @@ if __name__ == "__main__":
     results_dir = os.path.join(project_root, "results", "rl")
     os.makedirs(results_dir, exist_ok=True)
 
-    log_file = os.path.join(results_dir, f"{timestamp}_{policy_file_name}_{env_file_name}.log")
+    log_file = os.path.join(results_dir, f"{timestamp}_{policy_file_name}_{env_file_name}_lrpolicy_{lr_policy}.log")
     sys.stdout = open(log_file, "w", buffering=1, encoding="utf-8")
     sys.stderr = sys.stdout  # 错误也写入同一个文件
 
     print(f"[INFO] Logging to {log_file}")
+
+
+    print("\n========== Policy Config ==========")
+    pprint(policy_config)
+    print("===================================")
 
 
     train_ppo()
