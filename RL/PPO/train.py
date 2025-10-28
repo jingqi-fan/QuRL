@@ -3,6 +3,7 @@ import json
 import os
 import sys
 import time
+from pprint import pprint
 
 import numpy as np
 import yaml
@@ -216,6 +217,10 @@ if __name__ == "__main__":
         env_type = env_config["env_type"]
     else:
         env_type = env_name
+
+    print("\n========== Policy Config ==========")
+    pprint(policy_config)
+    print("===================================")
 
     # 从 env 中读取
     if env_config["network"] is None:
