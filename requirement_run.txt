@@ -51,3 +51,12 @@ cat slurm-1255062.out
 rm -rf ./*
 
 git pull origin master
+
+
+最新实验记录
+QGymGPU:
+WC2 n_model_mm_200, WC2中的参数和WC1一样，但是用的原来的trainer
+WC3 n_model_mm_200, WC3中的参数只有clip变了，其他和最初WC一致
+
+QGym:
+vanilla n_model_mm_200，预约跑50 hours
