@@ -1,0 +1,51 @@
+name: 'PPO'
+env:
+  device: 'cuda'
+  env_temp: 1.0
+  straight_through_min: False
+  model_seed: 100
+  test_seed: 42
+  train_seed: 3003
+  randomize: True
+  time_f: False
+  reward_scale: 1.0
+model:
+  policy_name: "WC"
+  scale: 3
+training:
+  behavior_cloning: False
+  normalize_advantage: True
+  normalize_value: True
+  normalize_reward: True
+  rescale_v: False
+  truncation: True
+  amp_value: False
+  var_scaler: 1.0
+  per_iter_normal_obs: False
+  per_iter_normal_value: False
+  actors: 50
+  episode_steps: 256
+  num_epochs: 50
+  train_batch: 50
+  test_batch: 50
+  lr: 0.0025
+  lr_policy: 0.0003
+  lr_value: 0.0025
+  min_lr_policy: 0.00001
+  min_lr_value: 0.00001
+  gae_lambda: 0.97
+  gamma: 0.99
+  target_kl: 0.015
+  vf_coef: 0.5
+#  batch_size: 648
+  batch_size: 2048
+  ppo_epochs: 4
+  clip_range_vf: 0.2
+  ent_coef: 0.003
+policy:
+  test_policy: 'softmax'
+plot:
+  plot_policy_curve: True
+  inds: [0,1]
+  val_inds: [0, 0]
+checkpoint: null
