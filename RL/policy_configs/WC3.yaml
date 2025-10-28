@@ -28,9 +28,9 @@ training:
   num_epochs: 50
   train_batch: 50
   test_batch: 50
-  lr: 0.0025
-  lr_policy: 0.0003
-  lr_value: 0.0025
+#  lr: 0.0025
+  lr_policy: 0.0006
+  lr_value: 0.0003
   min_lr_policy: 0.00001
   min_lr_value: 0.00001
   gae_lambda: 0.99

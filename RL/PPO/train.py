@@ -310,7 +310,7 @@ if __name__ == "__main__":
     per_iter_normal_value = policy_config['training']['per_iter_normal_value']
 
     # learning rates:
-    lr = policy_config['training']['lr']
+    # lr = policy_config['training']['lr']
     lr_policy = policy_config['training']['lr_policy']
     lr_value = policy_config['training']['lr_value']
     min_lr_policy =policy_config['training']['min_lr_policy']

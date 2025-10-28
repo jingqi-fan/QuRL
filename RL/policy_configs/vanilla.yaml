@@ -34,7 +34,7 @@ training:
 #  num_epochs: 2
 #  train_batch: 2
 #  test_batch: 2
-  lr: 0.0003 
+#  lr: 0.0003
   lr_policy: 0.0009
   lr_value: 0.0003
   min_lr_policy: 0.00001 
