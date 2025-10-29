@@ -261,7 +261,8 @@ class PPOTrainerTorchRL:
                         approx_kl_running = 0.9 * approx_kl_running + 0.1 * approx_kl
 
                     # [MOD] —— 若 KL 过大：仅跳过该 minibatch（不更新参数，不改变学习率，不推进 scheduler）
-                    if self.args.target_kl and approx_kl_running > 1.5 * self.args.target_kl:
+                    if approx_kl > 1.5 * self.args.target_kl:
+                        # if self.args.target_kl and approx_kl_running > 1.5 * self.args.target_kl:
                         self.opt_pi.zero_grad(set_to_none=True)
                         self.opt_v.zero_grad(set_to_none=True)
                         self.print(

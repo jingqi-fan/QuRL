@@ -260,7 +260,9 @@ class PPOTrainerTorchRL:
                         approx_kl_running = 0.9 * approx_kl_running + 0.1 * approx_kl
 
                     # [MOD] —— 若 KL 过大：将当前 lr 在原值基础上减去 1e-4（不低于 min_lr），清空梯度并跳过本次更新
-                    if self.args.target_kl and approx_kl_running > 1.5 * self.args.target_kl:
+                    # if self.args.target_kl and approx_kl_running > 1.5 * self.args.target_kl:
+                    if approx_kl > 1.5 * self.args.target_kl:
+
                         # 降 policy lr
                         for pg in self.opt_pi.param_groups:
                             old_lr = pg["lr"]
