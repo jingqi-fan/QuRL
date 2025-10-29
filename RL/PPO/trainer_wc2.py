@@ -277,12 +277,12 @@ class PPOTrainerTorchRL:
                         # 跳过该 minibatch：不做 backward/step，不推进 scheduler
                         self.opt_pi.zero_grad(set_to_none=True)
                         self.opt_v.zero_grad(set_to_none=True)
-                        self.print(
-                            f"[AutoLR] KL {approx_kl_running:.4g} > {1.5 * self.args.target_kl:.4g} → "
-                            f"decrease lr by 1e-4 → "
-                            f"π:{self.opt_pi.param_groups[0]['lr']:.6f}, "
-                            f"V:{self.opt_v.param_groups[0]['lr']:.6f}. Skip minibatch."
-                        )
+                        # self.print(
+                        #     f"[AutoLR] KL {approx_kl_running:.4g} > {1.5 * self.args.target_kl:.4g} → "
+                        #     f"decrease lr by 1e-4 → "
+                        #     f"π:{self.opt_pi.param_groups[0]['lr']:.6f}, "
+                        #     f"V:{self.opt_v.param_groups[0]['lr']:.6f}. Skip minibatch."
+                        # )
                         continue  # [MOD] —— 关键：跳过当前 minibatch
 
                     # ===== 正常更新路径（KL 未超阈）=====

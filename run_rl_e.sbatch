@@ -81,10 +81,12 @@ run() {
   info "END   $(date +'%F %T')  run: ${env_stub} ${tag}"
 }
 
-run WC.yaml          n_model_mm_10
-run WC.yaml          n_model_mm_50
-run WC.yaml          n_model_mm_100
-run WC.yaml          n_model_mm_200
+run WC.yaml          en_model_mm_10
+run WC.yaml          en_model_mm_50
+run WC.yaml          en_model_mm_100
+run WC.yaml          en_model_mm_200
+
+run WC.yaml          reentrant_2
 
 # ====== 串行跑多个实验（不需要 srun）======
 #run WC.yaml          en_model_mm_10

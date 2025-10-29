@@ -265,10 +265,10 @@ class PPOTrainerTorchRL:
                         # if self.args.target_kl and approx_kl_running > 1.5 * self.args.target_kl:
                         self.opt_pi.zero_grad(set_to_none=True)
                         self.opt_v.zero_grad(set_to_none=True)
-                        self.print(
-                            f"[EarlyStop] KL {approx_kl_running:.4g} > {1.5 * self.args.target_kl:.4g} → "
-                            f"skip minibatch (no update, lr unchanged)."
-                        )
+                        # self.print(
+                        #     f"[EarlyStop] KL {approx_kl_running:.4g} > {1.5 * self.args.target_kl:.4g} → "
+                        #     f"skip minibatch (no update, lr unchanged)."
+                        # )
                         continue  # [MOD] —— 关键：跳过当前 minibatch
 
                     # ===== 正常更新路径（KL 未超阈）=====

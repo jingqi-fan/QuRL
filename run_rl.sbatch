@@ -5,7 +5,7 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=64G
-#SBATCH --gres=gpu:1
+#SBATCH --gres=gpu:rtx8000:1
 #SBATCH --chdir=/scratch/jf5524/QGymGPU   # 保底：作业启动时的 CWD 就在项目根
 
 set -euo pipefail
@@ -81,10 +81,12 @@ run() {
   info "END   $(date +'%F %T')  run: ${env_stub} ${tag}"
 }
 
-run WC.yaml          n_model_mm_10
-run WC.yaml          n_model_mm_50
-run WC.yaml          n_model_mm_100
-run WC.yaml          n_model_mm_200
+run WC.yaml          en_model_mm_10
+run WC.yaml          en_model_mm_50
+run WC.yaml          en_model_mm_100
+run WC.yaml          en_model_mm_200
+
+run WC.yaml          reentrant_2
 
 # ====== 串行跑多个实验（不需要 srun）======
 #run WC.yaml          n_model_mm_10
@@ -102,7 +104,7 @@ run WC.yaml          n_model_mm_200
 #run pathwise.yaml          n_model_50
 #run pathwise.yaml          n_model_100
 #run pathwise.yaml          n_model_200
-#
+##
 #run vanilla.yaml          n_model_10
 #run vanilla.yaml          n_model_50
 #run vanilla.yaml          n_model_100
