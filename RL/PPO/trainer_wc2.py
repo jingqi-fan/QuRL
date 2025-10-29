@@ -203,7 +203,7 @@ class PPOTrainerTorchRL:
 
     # ---------- Learn ----------
     def learn(self):
-        self.print("Start training (TorchRL GPU-optimized)")
+        # self.print("Start training (TorchRL GPU-optimized)")
         for epoch in range(self.args.total_epochs):
             t0 = time.time()
 

@@ -202,8 +202,9 @@ class PPOTrainerTorchRL:
             self._behavior_cloning()
 
     # ---------- Learn ----------
+    # ---------- Learn ----------
     def learn(self):
-        self.print("Start training (TorchRL GPU-optimized)")
+        # self.print("Start training (TorchRL GPU-optimized)")
         for epoch in range(self.args.total_epochs):
             t0 = time.time()
 
@@ -259,27 +260,13 @@ class PPOTrainerTorchRL:
                         approx_kl = torch.mean((torch.exp(log_ratio) - 1) - log_ratio).clamp_min(0).item()
                         approx_kl_running = 0.9 * approx_kl_running + 0.1 * approx_kl
 
-                    # [MOD] —— 若 KL 过大：将当前 lr 在原值基础上减去 1e-4（不低于 min_lr），清空梯度并跳过本次更新
+                    # [MOD] —— 若 KL 过大：仅跳过该 minibatch（不更新参数，不改变学习率，不推进 scheduler）
                     if self.args.target_kl and approx_kl_running > 1.5 * self.args.target_kl:
-                        # 降 policy lr
-                        for pg in self.opt_pi.param_groups:
-                            old_lr = pg["lr"]
-                            new_lr = max(old_lr - 1e-4, self.args.min_lr_policy)
-                            pg["lr"] = new_lr
-                        # # 降 value lr
-                        # for pg in self.opt_v.param_groups:
-                        #     old_lr = pg["lr"]
-                        #     new_lr = max(old_lr - 1e-4, self.args.min_lr_value)
-                        #     pg["lr"] = new_lr
-
-                        # 跳过该 minibatch：不做 backward/step，不推进 scheduler
                         self.opt_pi.zero_grad(set_to_none=True)
                         self.opt_v.zero_grad(set_to_none=True)
                         self.print(
-                            f"[AutoLR] KL {approx_kl_running:.4g} > {1.5 * self.args.target_kl:.4g} → "
-                            f"decrease lr by 1e-4 → "
-                            f"π:{self.opt_pi.param_groups[0]['lr']:.6f}, "
-                            f"V:{self.opt_v.param_groups[0]['lr']:.6f}. Skip minibatch."
+                            f"[EarlyStop] KL {approx_kl_running:.4g} > {1.5 * self.args.target_kl:.4g} → "
+                            f"skip minibatch (no update, lr unchanged)."
                         )
                         continue  # [MOD] —— 关键：跳过当前 minibatch
 
@@ -292,10 +279,10 @@ class PPOTrainerTorchRL:
                     self.opt_pi.step()
                     self.opt_v.step()
 
-                    # 基于进度的 LR 调度（warmup→余弦），保持不变
+                    # 基于进度的 LR 调度（warmup→余弦）
                     self._lr_step()
 
-                # 保留原有的外层 KL 早停（可选）
+                # 可选：保持你原有的外层 KL 早停（整轮 ppo_epochs 提前结束）
                 if self.args.target_kl and approx_kl_running > 1.5 * self.args.target_kl:
                     break
 

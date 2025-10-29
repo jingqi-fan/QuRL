@@ -53,13 +53,27 @@ PY
 warn(){ echo "[WARN] $*" >&2; }
 info(){ echo "[INFO] $*"; }
 
+#run() {
+#  local env_stub="$1"   # 例如: vanilla_bc.yaml
+#  local tag="$2"        # 例如: en_model_mm_200
+#  info "START $(date +'%F %T')  CWD=$(pwd)  run: ${env_stub} ${tag}"
+#  # 回到项目根，保证相对路径正确
+#  ( cd "$PROJ" && \
+#    "$PY" -m RL.PPO.train "${env_stub}" "${tag}" \
+#      # 如需显式传绝对路径，可在 RL.PPO.train 支持的前提下加：
+#      # --envs_dir    "${PROJ}/configs/env" \
+#      # --logs_dir    "${PROJ}/results/cla"
+#  ) || warn "experiment failed: ${env_stub} ${tag}"
+#  info "END   $(date +'%F %T')  run: ${env_stub} ${tag}"
+#}
+
 run() {
   local env_stub="$1"   # 例如: vanilla_bc.yaml
-  local tag="$2"        # 例如: en_model_mm_200
+  local tag="$2"        # 例如: n_model_mm_200
   info "START $(date +'%F %T')  CWD=$(pwd)  run: ${env_stub} ${tag}"
   # 回到项目根，保证相对路径正确
   ( cd "$PROJ" && \
-    "$PY" -m RL.PPO.train "${env_stub}" "${tag}" \
+    "$PY" -m RL.PPO.train3 "${env_stub}" "${tag}" \
       # 如需显式传绝对路径，可在 RL.PPO.train 支持的前提下加：
       # --envs_dir    "${PROJ}/configs/env" \
       # --logs_dir    "${PROJ}/results/cla"
@@ -67,22 +81,16 @@ run() {
   info "END   $(date +'%F %T')  run: ${env_stub} ${tag}"
 }
 
+run WC.yaml          n_model_mm_10
+run WC.yaml          n_model_mm_50
+run WC.yaml          n_model_mm_100
+run WC.yaml          n_model_mm_200
 
 # ====== 串行跑多个实验（不需要 srun）======
 #run WC.yaml          en_model_mm_10
 #run WC.yaml          en_model_mm_50
 #run WC.yaml          en_model_mm_100
 #run WC.yaml          en_model_mm_200
-
-run WC4.yaml          n_model_mm_10
-run WC4.yaml          n_model_mm_50
-run WC4.yaml          n_model_mm_100
-run WC4.yaml          n_model_mm_200
-
-run WC5.yaml          n_model_mm_10
-run WC5.yaml          n_model_mm_50
-run WC5.yaml          n_model_mm_100
-run WC5.yaml          n_model_mm_200
 
 #run pathwise.yaml     reentrant_2
 ##
