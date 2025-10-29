@@ -55,7 +55,7 @@ git pull origin master
 
 最新实验记录
 QGymGPU:
-跑的en的和re(0.1)的wc
+跑的en的和re(0.5)的wc
 
 QGym:
 补充table re(0.1)
