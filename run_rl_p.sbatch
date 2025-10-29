@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH -J qgym_gpu_rl_n_model
 #SBATCH -o slurm-%j.out
-#SBATCH --time=5:00:00
+#SBATCH --time=3:00:00
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=64G
@@ -70,10 +70,10 @@ run() {
 
 # ====== 串行跑多个实验（不需要 srun）======
 
-run WC6.yaml          n_model_mm_10
-run WC6.yaml          n_model_mm_50
-run WC6.yaml          n_model_mm_100
-run WC6.yaml          n_model_mm_200
+run WC.yaml          n_model_mm_10
+#run WC6.yaml          n_model_mm_50
+#run WC6.yaml          n_model_mm_100
+#run WC6.yaml          n_model_mm_200
 
 
 #run WC.yaml          n_model_10
