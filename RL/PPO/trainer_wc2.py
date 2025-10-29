@@ -253,6 +253,37 @@ class PPOTrainerTorchRL:
                     ent = self._entropy(probs).mean()
                     value_loss = F.mse_loss(v_pred, ret_mb)
 
+                    # [MOD] —— 将 KL 的计算提前到 optimizer.step() 之前，用于“是否跳过该 minibatch”的判断
+                    with torch.no_grad():
+                        log_ratio = new_logp - old_logp
+                        approx_kl = torch.mean((torch.exp(log_ratio) - 1) - log_ratio).clamp_min(0).item()
+                        approx_kl_running = 0.9 * approx_kl_running + 0.1 * approx_kl
+
+                    # [MOD] —— 若 KL 过大：将当前 lr 在原值基础上减去 1e-4（不低于 min_lr），清空梯度并跳过本次更新
+                    if self.args.target_kl and approx_kl_running > 1.5 * self.args.target_kl:
+                        # 降 policy lr
+                        for pg in self.opt_pi.param_groups:
+                            old_lr = pg["lr"]
+                            new_lr = max(old_lr - 1e-4, self.args.min_lr_policy)
+                            pg["lr"] = new_lr
+                        # # 降 value lr
+                        # for pg in self.opt_v.param_groups:
+                        #     old_lr = pg["lr"]
+                        #     new_lr = max(old_lr - 1e-4, self.args.min_lr_value)
+                        #     pg["lr"] = new_lr
+
+                        # 跳过该 minibatch：不做 backward/step，不推进 scheduler
+                        self.opt_pi.zero_grad(set_to_none=True)
+                        self.opt_v.zero_grad(set_to_none=True)
+                        self.print(
+                            f"[AutoLR] KL {approx_kl_running:.4g} > {1.5 * self.args.target_kl:.4g} → "
+                            f"decrease lr by 1e-4 → "
+                            f"π:{self.opt_pi.param_groups[0]['lr']:.6f}, "
+                            f"V:{self.opt_v.param_groups[0]['lr']:.6f}. Skip minibatch."
+                        )
+                        continue  # [MOD] —— 关键：跳过当前 minibatch
+
+                    # ===== 正常更新路径（KL 未超阈）=====
                     total_loss = (policy_loss - self.args.ent_coef * ent) + (self.args.vf_coef * value_loss)
                     self.opt_pi.zero_grad(set_to_none=True)
                     self.opt_v.zero_grad(set_to_none=True)
@@ -261,13 +292,10 @@ class PPOTrainerTorchRL:
                     self.opt_pi.step()
                     self.opt_v.step()
 
+                    # 基于进度的 LR 调度（warmup→余弦），保持不变
                     self._lr_step()
 
-                    with torch.no_grad():
-                        log_ratio = new_logp - old_logp
-                        approx_kl = torch.mean((torch.exp(log_ratio) - 1) - log_ratio).clamp_min(0).item()
-                        approx_kl_running = 0.9 * approx_kl_running + 0.1 * approx_kl
-
+                # 保留原有的外层 KL 早停（可选）
                 if self.args.target_kl and approx_kl_running > 1.5 * self.args.target_kl:
                     break
 
@@ -277,7 +305,6 @@ class PPOTrainerTorchRL:
 
             if (epoch + 1) % self.args.eval_every == 0:
                 self.evaluate()
-
 
     # ---------- Rollout ----------
     @torch.no_grad()

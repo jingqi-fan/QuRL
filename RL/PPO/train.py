@@ -10,12 +10,12 @@ import yaml
 import torch
 
 from RL.PPO.trainer_pathwise import PathwiseTrainerTorchRL, PathwiseArgs
-from RL.PPO.trainer_wc import PPOTrainerTorchRL, PPOArgs
+# from RL.PPO.trainer_wc import PPOTrainerTorchRL, PPOArgs
 from RL.PPO.trainer_vanilla import PPOTrainerTorchRL_Vanilla
 from RL.env.rl_env import RLViewDiffDES
 from RL.utils.count_time import count_time
 
-# from RL.PPO.trainer_wc1 import PPOTrainerTorchRL, PPOArgs
+from RL.PPO.trainer_wc2 import PPOTrainerTorchRL, PPOArgs
 
 def load_rl_env(seed, batch):
     # ---- 抽样器（回到 torch 张量） ----

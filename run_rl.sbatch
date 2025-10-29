@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH -J qgym_gpu_rl_n_model
 #SBATCH -o slurm-%j.out
-#SBATCH --time=7:00:00
+#SBATCH --time=5:00:00
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=64G
@@ -74,15 +74,15 @@ run() {
 #run WC.yaml          n_model_mm_100
 #run WC.yaml          n_model_mm_200
 
-run WC2.yaml          n_model_mm_10
-run WC2.yaml          n_model_mm_50
-run WC2.yaml          n_model_mm_100
-run WC2.yaml          n_model_mm_200
+run WC.yaml          n_model_mm_10
+run WC.yaml          n_model_mm_50
+run WC.yaml          n_model_mm_100
+run WC.yaml          n_model_mm_200
 
-run WC3.yaml          n_model_mm_10
-run WC3.yaml          n_model_mm_50
-run WC3.yaml          n_model_mm_100
-run WC3.yaml          n_model_mm_200
+#run WC3.yaml          n_model_mm_10
+#run WC3.yaml          n_model_mm_50
+#run WC3.yaml          n_model_mm_100
+#run WC3.yaml          n_model_mm_200
 
 #run pathwise.yaml          n_model_10
 #run pathwise.yaml          n_model_50
