@@ -45,7 +45,7 @@ squeue -u $USER
 查看某作业详情
 scontrol show job 1761408
 查看作业输出内容
-cat slurm-1255062.out
+cat slurm-1418802.out
 
 删除当前文件夹下所有文件
 rm -rf ./*
@@ -60,3 +60,5 @@ QGymGPU:
 QGym:
 补充table re(0.9)
 +ref(0.9)
+
+1392475是跑了很久的vanilla 200
