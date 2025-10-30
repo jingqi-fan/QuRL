@@ -38,7 +38,7 @@ scp -r jf5524@greene.hpc.nyu.edu:/scratch/jf5524/QGymGPU/results/rl/ .
 1017_1258_pathwise.yaml_en_model_mm_200.yaml
 1017_1257_WC.yaml_en_model_mm_200.yaml
 
-scp -r jf5524@greene.hpc.nyu.edu:/scratch/jf5524/QGym/results/rl .
+scp -r jf5524@greene.hpc.nyu.edu:/scratch/jf5524/QGym/results/ .
 
 查看自己所有作业
 squeue -u $USER
@@ -55,7 +55,8 @@ git pull origin master
 
 最新实验记录
 QGymGPU:
-跑的en的和re(0.5)的wc
+跑的en+n td也许有问题的，的和re2f(0.5)的
 
 QGym:
-补充table re(0.1)
+补充table re(0.9)
++ref(0.9)

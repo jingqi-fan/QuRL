@@ -293,7 +293,7 @@ class BatchedDiffDES(EnvBase):
         # === 用 event_map_full 计算 Δq 并更新 job_count（合并语义） ===
         # delta_q = outcome @ self.event_map_full  # [B,Q]（到达+1 / 完成-1 / 路由按矩阵）
 
-        if random.random() < 0.5:
+        if random.random() < 0.1:
             delta_q = outcome @ self.event_map_full
         else:
             delta_q = outcome @ self.event_map_full2

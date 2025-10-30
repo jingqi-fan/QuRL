@@ -72,11 +72,11 @@ run() {
 run cmu          reentrant_2f
 run cmuq         reentrant_2f
 run max_pressure reentrant_2f
-
-run cmu          n_model_mm_100
-run cmu          n_model_mm_200
-run cmu         en_model_mm_100
-run cmu         en_model_mm_200
+#
+#run cmu          n_model_mm_100
+#run cmu          n_model_mm_200
+#run cmu         en_model_mm_100
+#run cmu         en_model_mm_200
 
 #run cmu          n_model_mm_50
 #run cmuq         n_model_mm_50
