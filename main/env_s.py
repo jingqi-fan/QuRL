@@ -415,7 +415,7 @@ class BatchedDiffDES(EnvBase):
         # 成本（用事件前人数算 holding cost；如需事件后可自行改）
         cost = (dt * job_counts_prev) @ self.h
         # reward = -cost
-        print(f'bonus {tardy_bonus}')
+        print(f'tardy_bonus shape {tardy_bonus.shape}')
         reward = -cost + tardy_bonus
         done = torch.zeros_like(reward, dtype=torch.bool)
 
