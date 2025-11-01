@@ -425,7 +425,7 @@ class BatchedDiffDES(EnvBase):
         # reward = -cost
         print(f'tardy bunus {tardy_bonus}')
         # print(f'tardy bonus shape: {tardy_bonus.shape}, cost shape {cost.shape}')
-        reward = -cost + tardy_bonus
+        reward = -cost*0.5 + tardy_bonus*0.5
         done = torch.zeros_like(reward, dtype=torch.bool)
 
         out = TensorDict(
