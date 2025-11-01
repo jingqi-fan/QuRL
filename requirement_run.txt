@@ -45,7 +45,7 @@ squeue -u $USER
 查看某作业详情
 scontrol show job 1761408
 查看作业输出内容
-cat slurm-1493174.out
+cat slurm-1493519.out
 
 删除当前文件夹下所有文件
 rm -rf ./*
