@@ -141,7 +141,7 @@ def draw_service(env, time: torch.Tensor) -> torch.Tensor:
 def draw_due_date(env, t: torch.Tensor) -> torch.Tensor:
     B = t.shape[0]
     Q = env.Q
-    rate = 1.0 / 2.0  # mean = 10 → λ = 0.1
+    rate = 1.1 #/ 2.0  # mean = 10 → λ = 0.1
     return torch.distributions.Exponential(rate).sample((B, Q)).to(env.device)
 
 def draw_inter_arrivals(env, time: torch.Tensor) -> torch.Tensor:
