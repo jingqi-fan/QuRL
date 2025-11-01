@@ -1,5 +1,4 @@
 # QGymGPU/RL/train.py
-import json
 import os
 import sys
 import time
@@ -10,12 +9,12 @@ import yaml
 import torch
 
 from RL.PPO.trainer_pathwise import PathwiseTrainerTorchRL, PathwiseArgs
-# from RL.PPO.trainer_wc import PPOTrainerTorchRL, PPOArgs
+from RL.PPO.trainer_wc import PPOTrainerTorchRL, PPOArgs
 from RL.PPO.trainer_vanilla import PPOTrainerTorchRL_Vanilla
-from RL.env.rl_env import RLViewDiffDES
+from RL.env.rl_env_s import RLViewDiffDES
 from RL.utils.count_time import count_time
 
-from RL.PPO.trainer_wc3 import PPOTrainerTorchRL, PPOArgs
+# from RL.PPO.trainer_wc2 import PPOTrainerTorchRL, PPOArgs
 
 def load_rl_env(seed, batch):
     # ---- 抽样器（回到 torch 张量） ----
@@ -37,6 +36,12 @@ def load_rl_env(seed, batch):
         lam_t = torch.as_tensor(lam_vec, device=env.device).view(1, orig_q).expand(t.size(0), orig_q)
         return torch.distributions.Exponential(rate=lam_t).sample()
 
+    def draw_due_date(env, t: torch.Tensor) -> torch.Tensor:
+        B = t.shape[0]
+        Q = env.Q
+        rate = 1.1  # / 2.0  # mean = 10 → λ = 0.1
+        return torch.distributions.Exponential(rate).sample((B, Q)).to(env.device)
+
     # ---- 构造环境 ----
     # env = RLViewDiffDES(
     #     network=network,
@@ -57,6 +62,7 @@ def load_rl_env(seed, batch):
         h=h,
         draw_service=draw_service,
         draw_inter_arrivals=draw_inter_arrivals,
+        draw_due_date=draw_due_date,
         temp=env_temp,
         device=device,
         seed=seed,
@@ -341,7 +347,7 @@ if __name__ == "__main__":
     results_dir = os.path.join(project_root, "results", "rl")
     os.makedirs(results_dir, exist_ok=True)
 
-    log_file = os.path.join(results_dir, f"{timestamp}_{policy_file_name}_{env_file_name}_wc3_nsw.log")
+    log_file = os.path.join(results_dir, f"{timestamp}_{policy_file_name}_{env_file_name}_lrpolicy_{lr_policy}.log")
     sys.stdout = open(log_file, "w", buffering=1, encoding="utf-8")
     sys.stderr = sys.stdout  # 错误也写入同一个文件
 

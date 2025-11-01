@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH -J qgym_gpu_rl_n_model
 #SBATCH -o slurm-%j.out
-#SBATCH --time=3:00:00
+#SBATCH --time=8:00:00
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=64G
@@ -67,7 +67,19 @@ run() {
   info "END   $(date +'%F %T')  run: ${env_stub} ${tag}"
 }
 
-
+runs() {
+  local env_stub="$1"   # 例如: vanilla_bc.yaml
+  local tag="$2"        # 例如: n_model_mm_200
+  info "START $(date +'%F %T')  CWD=$(pwd)  run: ${env_stub} ${tag}"
+  # 回到项目根，保证相对路径正确
+  ( cd "$PROJ" && \
+    "$PY" -m RL.PPO.train_s "${env_stub}" "${tag}" \
+      # 如需显式传绝对路径，可在 RL.PPO.train 支持的前提下加：
+      # --envs_dir    "${PROJ}/configs/env" \
+      # --logs_dir    "${PROJ}/results/cla"
+  ) || warn "experiment failed: ${env_stub} ${tag}"
+  info "END   $(date +'%F %T')  run: ${env_stub} ${tag}"
+}
 # ====== 串行跑多个实验（不需要 srun）======
 
 run WC.yaml          n_model_mm_10

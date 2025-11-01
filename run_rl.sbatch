@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH -J qgym_gpu_rl_n_model
 #SBATCH -o slurm-%j.out
-#SBATCH --time=5:00:00
+#SBATCH --time=8:00:00
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=64G
@@ -73,7 +73,21 @@ run() {
   info "START $(date +'%F %T')  CWD=$(pwd)  run: ${env_stub} ${tag}"
   # 回到项目根，保证相对路径正确
   ( cd "$PROJ" && \
-    "$PY" -m RL.PPO.train2 "${env_stub}" "${tag}" \
+    "$PY" -m RL.PPO.train "${env_stub}" "${tag}" \
+      # 如需显式传绝对路径，可在 RL.PPO.train 支持的前提下加：
+      # --envs_dir    "${PROJ}/configs/env" \
+      # --logs_dir    "${PROJ}/results/cla"
+  ) || warn "experiment failed: ${env_stub} ${tag}"
+  info "END   $(date +'%F %T')  run: ${env_stub} ${tag}"
+}
+
+runs() {
+  local env_stub="$1"   # 例如: vanilla_bc.yaml
+  local tag="$2"        # 例如: n_model_mm_200
+  info "START $(date +'%F %T')  CWD=$(pwd)  run: ${env_stub} ${tag}"
+  # 回到项目根，保证相对路径正确
+  ( cd "$PROJ" && \
+    "$PY" -m RL.PPO.train_s "${env_stub}" "${tag}" \
       # 如需显式传绝对路径，可在 RL.PPO.train 支持的前提下加：
       # --envs_dir    "${PROJ}/configs/env" \
       # --logs_dir    "${PROJ}/results/cla"
@@ -86,22 +100,24 @@ run() {
 #run WC.yaml          en_model_mm_100
 #run WC.yaml          en_model_mm_200
 
-run WC.yaml          reentrant_2f
-run pathwise.yaml          reentrant_2f
-run vanilla.yaml          reentrant_2f
-run vanilla_bc.yaml          reentrant_2f
+#run WC.yaml          reentrant_2f
+#run pathwise.yaml          reentrant_2f
+#run vanilla.yaml          reentrant_2f
+#run vanilla_bc.yaml          reentrant_2f
 
 # ====== 串行跑多个实验（不需要 srun）======
-#run WC.yaml          n_model_mm_10
-#run WC.yaml          n_model_mm_50
-#run WC.yaml          n_model_mm_100
-#run WC.yaml          n_model_mm_200
+runs WC.yaml          n_model_mm_10
+runs WC.yaml          n_model_mm_50
+runs WC.yaml          n_model_mm_100
+runs WC.yaml          n_model_mm_200
 
+runs WC.yaml          en_model_mm_10
+runs WC.yaml          en_model_mm_50
+runs WC.yaml          en_model_mm_100
+runs WC.yaml          en_model_mm_200
 
-#run WC3.yaml          n_model_mm_10
-#run WC3.yaml          n_model_mm_50
-#run WC3.yaml          n_model_mm_100
-#run WC3.yaml          n_model_mm_200
+runs WC.yaml          reentrant_2
+runs WC.yaml          reentrant_2f
 
 #run pathwise.yaml          n_model_10
 #run pathwise.yaml          n_model_50

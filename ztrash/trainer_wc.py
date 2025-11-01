@@ -201,6 +201,148 @@ class PPOTrainerTorchRL:
         if self.args.behavior_cloning:
             self._behavior_cloning()
 
+    # def learn(self):
+    #     self.print("Start training (single-env, batched)")
+    #     for epoch in range(self.args.total_epochs):
+    #         t0 = time.time()
+    #         traj = self._rollout(self.train_env, self.args.episode_steps, self.args.train_batch)
+    #
+    #         # SB3 等价 GAE
+    #         adv, ret = compute_gae(traj['rew'], traj['done'],
+    #                                traj['val'][:-1], traj['val'][1:],
+    #                                self.args.gamma, self.args.gae_lambda)
+    #         if self.args.normalize_advantage:
+    #             adv = (adv - adv.mean()) / (adv.std(unbiased=False) + 1e-8)
+    #
+    #         # 用本轮 rollout 的 returns 统计来做 value 重标尺（与你一致）
+    #         with torch.no_grad():
+    #             self.returns_mean = ret.mean()
+    #             self.returns_std  = ret.std().clamp_min(1e-6)
+    #
+    #         # flatten to [T*B]
+    #         T, B = self.args.episode_steps, self.args.train_batch
+    #         obs_f  = traj['obs'][:-1].reshape(T*B, self.args.obs_dim)
+    #         act_f  = traj['act'].reshape(T*B, self.args.S, self.args.Q)
+    #         oldlp  = traj['logp'].reshape(T*B)
+    #         adv_f  = adv.reshape(T*B)
+    #         ret_f  = ret.reshape(T*B)
+    #
+    #         # PPO updates（与 SB3 对齐：approx_kl、entropy、进度/调度）
+    #         approx_kl_running = 0.0
+    #         idx = torch.randperm(T*B, device=obs_f.device)
+    #         mb = self.args.minibatch_size
+    #
+    #         for _ in range(self.args.ppo_epochs):
+    #             for start in range(0, T*B, mb):
+    #                 mb_idx = idx[start:start+mb]
+    #                 o = obs_f[mb_idx]
+    #                 a = act_f[mb_idx]
+    #                 old_logp = oldlp[mb_idx]
+    #                 adv_mb = adv_f[mb_idx]
+    #                 ret_mb = ret_f[mb_idx]
+    #
+    #                 logits, v_pred = self.policy(o)
+    #
+    #                 # value 反标尺（与你的 WC_policy.rescale_v 一样）
+    #                 if self.args.rescale_value:
+    #                     v_pred = v_pred * self.returns_std + self.returns_mean
+    #
+    #                 # --- 分布：softmax → *network → min(·, obsQ) → 零行回退 → 归一化
+    #                 probs = self._wc_probs_from_logits_obs(logits, o)
+    #
+    #                 # new_logp（多分类独立的和）
+    #                 new_logp = self._log_prob_of(probs, a)
+    #
+    #                 ratio = torch.exp(new_logp - old_logp)
+    #                 surr1 = ratio * adv_mb
+    #                 surr2 = torch.clamp(ratio, 1 - self.args.clip_eps, 1 + self.args.clip_eps) * adv_mb
+    #                 policy_loss = -torch.min(surr1, surr2).mean()
+    #
+    #                 # 熵（按 S 求和后取均值）
+    #                 ent = self._entropy(probs).mean()
+    #
+    #                 value_loss = F.mse_loss(v_pred, ret_mb)
+    #
+    #                 # -- policy step
+    #                 self.opt_pi.zero_grad(set_to_none=True)
+    #                 (policy_loss - self.args.ent_coef * ent).backward(retain_graph=True)
+    #                 nn.utils.clip_grad_norm_(self.policy.parameters(), self.args.max_grad_norm)
+    #                 self.opt_pi.step()
+    #
+    #                 # -- value step
+    #                 self.opt_v.zero_grad(set_to_none=True)
+    #                 (self.args.vf_coef * value_loss).backward()
+    #                 nn.utils.clip_grad_norm_(self.policy.parameters(), self.args.max_grad_norm)
+    #                 self.opt_v.step()
+    #
+    #                 # LR schedule（SB3风格 progress_remaining）
+    #                 self._lr_step()
+    #
+    #                 # KL 近似（SB3公式）
+    #                 with torch.no_grad():
+    #                     log_ratio = new_logp - old_logp
+    #                     approx_kl = torch.mean((torch.exp(log_ratio) - 1) - log_ratio).clamp_min(0).item()
+    #                     approx_kl_running = 0.9 * approx_kl_running + 0.1 * approx_kl
+    #                 if self.args.target_kl is not None and approx_kl_running > 1.5 * self.args.target_kl:
+    #                     break
+    #             if self.args.target_kl is not None and approx_kl_running > 1.5 * self.args.target_kl:
+    #                 break
+    #
+    #         self.ct.get_end_time(time.time())
+    #         print(f'get total time {self.ct.get_total_time():.2f}s')
+    #         self.print(f"[Epoch {epoch+1}/{self.args.total_epochs}] , KL~{approx_kl_running:.5f}")
+    #
+    #         if (epoch + 1) % self.args.eval_every == 0:
+    #             self.evaluate()
+    #             # self.print(f"  Eval: return mean {mean_r:.4f} ± {std_r:.4f}")
+
+    # # ---------- internals ----------
+    # @torch.no_grad()
+    # def _rollout(self, env: EnvBase, T: int, B: int) -> Dict[str, torch.Tensor]:
+    #     device = torch.device(self.args.device)
+    #     td = env.reset()
+    #     obs = torch.zeros(T+1, B, self.args.obs_dim, device=device)
+    #     act = torch.zeros(T,   B, self.args.S, self.args.Q, device=device)
+    #     logp= torch.zeros(T,   B, device=device)
+    #     rew = torch.zeros(T,   B, device=device)
+    #     done= torch.zeros(T,   B, device=device)
+    #     val = torch.zeros(T+1, B, device=device)
+    #
+    #     obs[0] = td['obs'].to(device)
+    #     for t in range(T):
+    #         logits, v = self.policy(obs[t])
+    #
+    #         # value 反标尺
+    #         if self.args.rescale_value:
+    #             v = v * self.returns_std + self.returns_mean
+    #
+    #         # 概率
+    #         probs = self._wc_probs_from_logits_obs(logits, obs[t])
+    #
+    #         # 采样/贪心（与 WC_Policy.randomize 一致）
+    #         if self.args.randomize:
+    #             dist = OneHotCategorical(probs=probs)  # 一次性 over [B,S,Q] → 需按 S 拆分，简化用逐S采样：
+    #             # OneHotCategorical 只支持最后一维，这里手动逐S采样：
+    #             a, lp = self._sample_and_logp(probs)
+    #         else:
+    #             a, lp = self._argmax_and_logp(probs)
+    #
+    #         val[t] = v
+    #         act[t] = a
+    #         logp[t] = lp
+    #
+    #         out = env.step(TensorDict({"action": a.to(env.device)}, batch_size=[B]))
+    #         nxt = out["next"]
+    #         obs[t + 1] = nxt["obs"].to(device)
+    #         rew[t] = nxt["reward"].reshape(B).to(device)
+    #         done[t] = nxt["done"].reshape(B).to(device)
+    #
+    #     _, v_last = self.policy(obs[-1])
+    #     if self.args.rescale_value:
+    #         v_last = v_last * self.returns_std + self.returns_mean
+    #     val[-1] = v_last
+    #     return {"obs": obs, "act": act, "logp": logp, "rew": rew, "done": done, "val": val}
+
     # ---------- Learn ----------
     def learn(self):
         self.print("Start training (TorchRL GPU-optimized)")
@@ -251,8 +393,17 @@ class PPOTrainerTorchRL:
                     policy_loss = -torch.min(surr1, surr2).mean()
 
                     ent = self._entropy(probs).mean()
-                    # value_loss = F.mse_loss(v_pred, ret_mb)
-                    value_loss = F.smooth_l1_loss(v_pred, ret_mb)  # 代替 F.mse_loss
+                    value_loss = F.mse_loss(v_pred, ret_mb)
+
+                    # self.opt_pi.zero_grad(set_to_none=True)
+                    # (policy_loss - self.args.ent_coef * ent).backward(retain_graph=True)
+                    # nn.utils.clip_grad_norm_(self.policy.parameters(), self.args.max_grad_norm)
+                    # self.opt_pi.step()
+                    #
+                    # self.opt_v.zero_grad(set_to_none=True)
+                    # (self.args.vf_coef * value_loss).backward()
+                    # nn.utils.clip_grad_norm_(self.policy.parameters(), self.args.max_grad_norm)
+                    # self.opt_v.step()
 
                     total_loss = (policy_loss - self.args.ent_coef * ent) + (self.args.vf_coef * value_loss)
                     self.opt_pi.zero_grad(set_to_none=True)
@@ -333,58 +484,51 @@ class PPOTrainerTorchRL:
 
         return {"obs": obs, "act": act, "logp": logp, "rew": rew, "done": done, "val": val}
 
-    # def _wc_probs_from_logits_obs(self, logits: torch.Tensor, obs: torch.Tensor) -> torch.Tensor:
-    #     """
-    #     与 WC_Policy 一致的概率构造：
-    #       action = logits.view(B,S,Q) → softmax(dim=-1)
-    #       * network_mask
-    #       min(·, queues)     (若 time_f=True，queues = obs[..., :Q])
-    #       若一行全 0 → 回退 network_mask
-    #       行归一化
-    #     """
-    #     B, S, Q = logits.shape
-    #     probs = F.softmax(logits, dim=-1)                  # [B,S,Q]
-    #     probs = probs * self.network_mask.to(probs.device) # 掩码
-    #     # 取 obs 的队列部分
-    #     if self.args.time_f:
-    #         queues = obs[:, :Q]
-    #     else:
-    #         queues = obs[:, :Q]  # 若 obs 仅 Q 维，这里等价
-    #     probs = torch.minimum(probs, queues.view(B, 1, Q).repeat(1, S, 1))
-    #     zero_mask = torch.all(probs == 0, dim=-1, keepdim=True).float()
-    #     probs = probs + zero_mask * self.network_mask.to(probs.device)
-    #     probs = probs / probs.sum(dim=-1, keepdim=True).clamp_min(1e-12)
-    #     return probs
-
     def _wc_probs_from_logits_obs(self, logits: torch.Tensor, obs: torch.Tensor) -> torch.Tensor:
+        """
+        与 WC_Policy 一致的概率构造：
+          action = logits.view(B,S,Q) → softmax(dim=-1)
+          * network_mask
+          min(·, queues)     (若 time_f=True，queues = obs[..., :Q])
+          若一行全 0 → 回退 network_mask
+          行归一化
+        """
         B, S, Q = logits.shape
-        # logits 先做一下 clamp，避免极端 softmax 溢出
-        logits = logits.clamp(-20, 20)
-
-        probs = F.softmax(logits, dim=-1)  # [B,S,Q] > 0
-        probs = probs * self.network_mask.to(probs.device)  # 掩码(≥0)
-
-        queues = obs[:, :Q]
-        probs = torch.minimum(probs, queues.view(B, 1, Q).expand(B, S, Q))
-
-        # 行全 0 的回退
-        zero_mask = torch.all(probs <= 0, dim=-1, keepdim=True)
-        probs = torch.where(zero_mask, self.network_mask.to(probs.device), probs)
-
-        # 数值保底：先下限夹住，再归一化
-        probs = probs.clamp_min(1e-8)
-        probs = probs / probs.sum(dim=-1, keepdim=True).clamp_min(1e-8)
+        probs = F.softmax(logits, dim=-1)                  # [B,S,Q]
+        probs = probs * self.network_mask.to(probs.device) # 掩码
+        # 取 obs 的队列部分
+        if self.args.time_f:
+            queues = obs[:, :Q]
+        else:
+            queues = obs[:, :Q]  # 若 obs 仅 Q 维，这里等价
+        probs = torch.minimum(probs, queues.view(B, 1, Q).repeat(1, S, 1))
+        zero_mask = torch.all(probs == 0, dim=-1, keepdim=True).float()
+        probs = probs + zero_mask * self.network_mask.to(probs.device)
+        probs = probs / probs.sum(dim=-1, keepdim=True).clamp_min(1e-12)
         return probs
 
-    # def _sample_and_logp_vec(self, probs):  # probs: [B,S,Q]
+    # def _sample_and_logp_vec(self, probs: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+    #     """
+    #     独立 S 个 Categorical 的采样与 log_prob 和（与你代码一致）
+    #     """
     #     B, S, Q = probs.shape
-    #     flat = probs.reshape(B * S, Q)
-    #     idx = torch.multinomial(flat, 1).squeeze(-1)  # [B*S]
-    #     a = F.one_hot(idx, num_classes=Q).float().reshape(B, S, Q)
-    #     # logp = sum_s log p_s(a_s)
-    #     logp = torch.log(flat.gather(1, idx.view(-1, 1)).squeeze(1).clamp_min(1e-12)) \
-    #         .view(B, S).sum(dim=1)  # [B]
+    #     a = torch.zeros(B, S, Q, device=probs.device)
+    #     logp = torch.zeros(B, device=probs.device)
+    #     for s in range(S):
+    #         cat = Categorical(probs=probs[:, s, :])
+    #         idx = cat.sample()            # [B]
+    #         a[torch.arange(B), s, idx] = 1.0
+    #         logp += cat.log_prob(idx)
     #     return a, logp
+    def _sample_and_logp_vec(self, probs):  # probs: [B,S,Q]
+        B, S, Q = probs.shape
+        flat = probs.reshape(B * S, Q)
+        idx = torch.multinomial(flat, 1).squeeze(-1)  # [B*S]
+        a = F.one_hot(idx, num_classes=Q).float().reshape(B, S, Q)
+        # logp = sum_s log p_s(a_s)
+        logp = torch.log(flat.gather(1, idx.view(-1, 1)).squeeze(1).clamp_min(1e-12)) \
+            .view(B, S).sum(dim=1)  # [B]
+        return a, logp
 
     def _argmax_and_logp(self, probs: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         """
@@ -400,36 +544,13 @@ class PPOTrainerTorchRL:
             lp += cat.log_prob(idx[:, s])
         return a, lp
 
-    # def _log_prob_of(self, probs: torch.Tensor, one_hot: torch.Tensor) -> torch.Tensor:
-    #     idxs = one_hot.argmax(dim=-1)  # [B,S]
-    #     B, S, _ = one_hot.shape
-    #     logp = torch.zeros(B, device=probs.device)
-    #     for s in range(S):
-    #         cat = Categorical(probs=probs[:, s, :])
-    #         logp += cat.log_prob(idxs[:, s])
-    #     return logp
-
-    def _sample_and_logp_vec(self, probs):  # probs: [B,S,Q]
-        B, S, Q = probs.shape
-        flat = probs.reshape(B * S, Q).clamp_min(1e-8)
-        flat = flat / flat.sum(dim=1, keepdim=True).clamp_min(1e-8)
-
-        idx = torch.multinomial(flat, 1, replacement=True).squeeze(-1)  # replacement=True 更稳
-        a = F.one_hot(idx, num_classes=Q).float().reshape(B, S, Q)
-
-        sel = flat.gather(1, idx.view(-1, 1)).squeeze(1).clamp_min(1e-8)
-        logp = sel.log().view(B, S).sum(dim=1)
-        return a, logp
-
-    def _log_prob_of(self, probs, one_hot):
-        probs = probs.clamp_min(1e-8)
-        probs = probs / probs.sum(dim=-1, keepdim=True).clamp_min(1e-8)
+    def _log_prob_of(self, probs: torch.Tensor, one_hot: torch.Tensor) -> torch.Tensor:
         idxs = one_hot.argmax(dim=-1)  # [B,S]
         B, S, _ = one_hot.shape
         logp = torch.zeros(B, device=probs.device)
         for s in range(S):
-            p = probs[:, s, :].clamp_min(1e-8)
-            logp += p[torch.arange(B), idxs[:, s]].log()
+            cat = Categorical(probs=probs[:, s, :])
+            logp += cat.log_prob(idxs[:, s])
         return logp
 
     def _entropy(self, probs: torch.Tensor) -> torch.Tensor:
