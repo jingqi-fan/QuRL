@@ -6,7 +6,6 @@ import math
 from tensordict import TensorDict
 from datetime import datetime
 
-from configs.scripts.s_cmu import draw_due_date
 # 你自己的工具（保持不变）
 from utils.switchplot import create_plot_dir, create_loss_dir
 # 如果你用到了 rt.*（pad_pool / Sinkhorn / linear_assignment_batch），请确保导入：
@@ -167,7 +166,7 @@ class Trainer:
             device=self.device,
             draw_service=self.draw_service,
             draw_inter_arrivals=self.draw_inter_arrivals,
-            draw_due_date=draw_due_date,
+            draw_due_date=self.draw_due_date,
             reentrant=self.env_config.get('reentrant', 0)
         )
 
