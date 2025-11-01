@@ -77,6 +77,9 @@ run() {
 #run cmu_s          n_model_mm_200
 #run cmu_s         en_model_mm_100
 #run cmu_s         en_model_mm_200
+run cmu_s          n_model_mm_10
+run cmuq_s         n_model_mm_10
+run max_pressure_s n_model_mm_10
 
 run cmu_s          n_model_mm_50
 run cmuq_s         n_model_mm_50
@@ -89,6 +92,22 @@ run max_pressure_s n_model_mm_100
 run cmu_s          n_model_mm_200
 run cmuq_s         n_model_mm_200
 run max_pressure_s n_model_mm_200
+
+run cmu_s          en_model_mm_10
+run cmuq_s         en_model_mm_10
+run max_pressure_s en_model_mm_10
+
+run cmu_s          en_model_mm_50
+run cmuq_s         en_model_mm_50
+run max_pressure_s en_model_mm_50
+
+run cmu_s          en_model_mm_100
+run cmuq_s         en_model_mm_100
+run max_pressure_s en_model_mm_100
+
+run cmu_s          en_model_mm_200
+run cmuq_s         en_model_mm_200
+run max_pressure_s en_model_mm_200
 
 
 run cmu_s          reentrant_2
