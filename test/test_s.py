@@ -99,16 +99,16 @@ def main():
         temp=1.0,
         device=device,
         seed=args.seed,
-        default_B=1,
+        default_B=3,
         queue_event_options=None if queue_event_options is None else torch.tensor(queue_event_options, dtype=torch.float32),
         queue_event_options2=None if queue_event_options2 is None else torch.tensor(queue_event_options2, dtype=torch.float32),
         reentrant=0,
         verbose=False,
     )
 
-    B_train = 1
+    B_train = 3
     td = env.reset(env.gen_params(batch_size=[B_train]))
-    B = 1
+    B = 3
     for t in range(1, steps + 1):
         # 随机动作：[B,S,Q]；环境内部会按 server 维对 Q 做归一化
         # action = torch.rand(B, S, Q, device=device)

@@ -35,7 +35,7 @@ class BatchedDiffDES(EnvBase):
         draw_service,              # fn(env, t:[B,1]) -> [B,Q]
         draw_inter_arrivals,       # fn(env, t:[B,1]) -> [B,Q]
         draw_due_date,
-        max_jobs: int = 64,
+        max_jobs: int = 10,
         temp: float = 1.0,
         device: str = "cuda",
         seed: Optional[int] = None,
@@ -308,16 +308,16 @@ class BatchedDiffDES(EnvBase):
         # === 在这里就可以做“是否迟到”的判定 ===
         left_tail = (outcome[..., Q:].view(B, Q, J) > 0.5)  # [B,Q,J]：本步完成的那个槽位
         # 取被完成作业的剩余 due（其他位置为 0）
-        is_complete = (~is_arrival).unsqueeze(-1)  # [B,1]
-
-        completed_due = (due_dates * left_tail.float()).sum(dim=(1, 2), keepdim=True)  # [B,1]
+        is_complete = torch.logical_not(is_arrival)
+        completed_due = (due_dates * left_tail.float()).sum(dim=(1, 2)) # [B]
         # tardy：严格小于 0 才算（=0 不算迟到）
         # —— tardy 分数：完成且 late → -1；完成且 on-time → +1；到达 → 0
+        dt_b = dt.squeeze(-1)
         tardy_bonus = torch.where(
             is_complete,
-            torch.where(completed_due < 0, -torch.ones_like(dt), torch.ones_like(dt)),
-            torch.zeros_like(dt),
-        )  # 形状 [B,1]，dtype 与 dt/ reward 一致
+            torch.where(completed_due < 0, -torch.ones_like(dt_b), torch.ones_like(dt_b)),
+            torch.zeros_like(dt_b),
+        )  # 形状 [B]，dtype 与 reward 一致才对
 
         # === 用 event_map_full 计算 Δq 并更新 job_count（合并语义） ===
         # delta_q = outcome @ self.event_map_full  # [B,Q]（到达+1 / 完成-1 / 路由按矩阵）
@@ -415,7 +415,6 @@ class BatchedDiffDES(EnvBase):
         # 成本（用事件前人数算 holding cost；如需事件后可自行改）
         cost = (dt * job_counts_prev) @ self.h
         # reward = -cost
-        print(f'tardy_bonus shape {tardy_bonus.shape}, cost shape {cost.shape}')
         reward = -cost + tardy_bonus
         done = torch.zeros_like(reward, dtype=torch.bool)
 
