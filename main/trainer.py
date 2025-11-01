@@ -6,7 +6,6 @@ import math
 from tensordict import TensorDict
 from datetime import datetime
 
-from configs.scripts.s_cmu import draw_due_date
 # 你自己的工具（保持不变）
 from utils.switchplot import create_plot_dir, create_loss_dir
 # 如果你用到了 rt.*（pad_pool / Sinkhorn / linear_assignment_batch），请确保导入：
