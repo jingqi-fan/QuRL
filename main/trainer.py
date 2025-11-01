@@ -6,12 +6,14 @@ import math
 from tensordict import TensorDict
 from datetime import datetime
 
+from configs.scripts.s_cmu import draw_due_date
 # 你自己的工具（保持不变）
 from utils.switchplot import create_plot_dir, create_loss_dir
 # 如果你用到了 rt.*（pad_pool / Sinkhorn / linear_assignment_batch），请确保导入：
 # import your_runtime_lib as rt
 
-from main.env import BatchedDiffDES
+# from main.env import BatchedDiffDES
+from main.env_s import BatchedDiffDES
 import utils.routing as rt
 
 class Trainer:
@@ -21,13 +23,14 @@ class Trainer:
     """
 
     def __init__(self, model_config, env_config, policy, optimizer,
-                 draw_service, draw_inter_arrivals, experiment_name):
+                 draw_service, draw_inter_arrivals, experiment_name, draw_due_date=None):
         self.model_config = model_config
         self.env_config = env_config
         self.policy = policy
         self.optimizer = optimizer
         self.draw_service = draw_service
         self.draw_inter_arrivals = draw_inter_arrivals
+        self.draw_due_date = draw_due_date
 
         self.test_loss = []
         self.fig_dir = create_plot_dir(self.model_config, self.env_config, experiment_name=experiment_name)
@@ -52,6 +55,7 @@ class Trainer:
             device=self.device,
             draw_service=self.draw_service,
             draw_inter_arrivals=self.draw_inter_arrivals,
+            draw_due_date=self.draw_due_date,
             reentrant=self.env_config.get('reentrant', 0)
         )
 

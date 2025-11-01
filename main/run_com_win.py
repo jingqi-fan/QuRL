@@ -14,10 +14,6 @@ SCRIPT_MAP = {
     "fluid": "fixed_arrival_rate_fluid.py",
     "max_pressure": "fixed_arrival_rate_max_pressure.py",
     # 可以继续加别的策略：
-    "cmu_g": "gaussian_rate_cmu.py",
-    "cmuq_g": "gaussian_rate_cmuq.py",
-    "fluid_g": "gaussian_rate_fluid.py",
-    "max_pressure_g": "gaussian_rate_max_pressure.py",
 }
 
 # ---------------- 指标解析正则 ---------------- #

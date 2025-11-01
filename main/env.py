@@ -43,6 +43,7 @@ class BatchedDiffDES(EnvBase):
         queue_event_options2=None,
         reentrant = 0,
         verbose: bool = False,
+        # draw_due_date=None
     ):
         super().__init__(batch_size=[])
         self.to(device)
