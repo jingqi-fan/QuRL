@@ -201,9 +201,151 @@ class PPOTrainerTorchRL:
         if self.args.behavior_cloning:
             self._behavior_cloning()
 
+    # def learn(self):
+    #     self.print("Start training (single-env, batched)")
+    #     for epoch in range(self.args.total_epochs):
+    #         t0 = time.time()
+    #         traj = self._rollout(self.train_env, self.args.episode_steps, self.args.train_batch)
+    #
+    #         # SB3 等价 GAE
+    #         adv, ret = compute_gae(traj['rew'], traj['done'],
+    #                                traj['val'][:-1], traj['val'][1:],
+    #                                self.args.gamma, self.args.gae_lambda)
+    #         if self.args.normalize_advantage:
+    #             adv = (adv - adv.mean()) / (adv.std(unbiased=False) + 1e-8)
+    #
+    #         # 用本轮 rollout 的 returns 统计来做 value 重标尺（与你一致）
+    #         with torch.no_grad():
+    #             self.returns_mean = ret.mean()
+    #             self.returns_std  = ret.std().clamp_min(1e-6)
+    #
+    #         # flatten to [T*B]
+    #         T, B = self.args.episode_steps, self.args.train_batch
+    #         obs_f  = traj['obs'][:-1].reshape(T*B, self.args.obs_dim)
+    #         act_f  = traj['act'].reshape(T*B, self.args.S, self.args.Q)
+    #         oldlp  = traj['logp'].reshape(T*B)
+    #         adv_f  = adv.reshape(T*B)
+    #         ret_f  = ret.reshape(T*B)
+    #
+    #         # PPO updates（与 SB3 对齐：approx_kl、entropy、进度/调度）
+    #         approx_kl_running = 0.0
+    #         idx = torch.randperm(T*B, device=obs_f.device)
+    #         mb = self.args.minibatch_size
+    #
+    #         for _ in range(self.args.ppo_epochs):
+    #             for start in range(0, T*B, mb):
+    #                 mb_idx = idx[start:start+mb]
+    #                 o = obs_f[mb_idx]
+    #                 a = act_f[mb_idx]
+    #                 old_logp = oldlp[mb_idx]
+    #                 adv_mb = adv_f[mb_idx]
+    #                 ret_mb = ret_f[mb_idx]
+    #
+    #                 logits, v_pred = self.policy(o)
+    #
+    #                 # value 反标尺（与你的 WC_policy.rescale_v 一样）
+    #                 if self.args.rescale_value:
+    #                     v_pred = v_pred * self.returns_std + self.returns_mean
+    #
+    #                 # --- 分布：softmax → *network → min(·, obsQ) → 零行回退 → 归一化
+    #                 probs = self._wc_probs_from_logits_obs(logits, o)
+    #
+    #                 # new_logp（多分类独立的和）
+    #                 new_logp = self._log_prob_of(probs, a)
+    #
+    #                 ratio = torch.exp(new_logp - old_logp)
+    #                 surr1 = ratio * adv_mb
+    #                 surr2 = torch.clamp(ratio, 1 - self.args.clip_eps, 1 + self.args.clip_eps) * adv_mb
+    #                 policy_loss = -torch.min(surr1, surr2).mean()
+    #
+    #                 # 熵（按 S 求和后取均值）
+    #                 ent = self._entropy(probs).mean()
+    #
+    #                 value_loss = F.mse_loss(v_pred, ret_mb)
+    #
+    #                 # -- policy step
+    #                 self.opt_pi.zero_grad(set_to_none=True)
+    #                 (policy_loss - self.args.ent_coef * ent).backward(retain_graph=True)
+    #                 nn.utils.clip_grad_norm_(self.policy.parameters(), self.args.max_grad_norm)
+    #                 self.opt_pi.step()
+    #
+    #                 # -- value step
+    #                 self.opt_v.zero_grad(set_to_none=True)
+    #                 (self.args.vf_coef * value_loss).backward()
+    #                 nn.utils.clip_grad_norm_(self.policy.parameters(), self.args.max_grad_norm)
+    #                 self.opt_v.step()
+    #
+    #                 # LR schedule（SB3风格 progress_remaining）
+    #                 self._lr_step()
+    #
+    #                 # KL 近似（SB3公式）
+    #                 with torch.no_grad():
+    #                     log_ratio = new_logp - old_logp
+    #                     approx_kl = torch.mean((torch.exp(log_ratio) - 1) - log_ratio).clamp_min(0).item()
+    #                     approx_kl_running = 0.9 * approx_kl_running + 0.1 * approx_kl
+    #                 if self.args.target_kl is not None and approx_kl_running > 1.5 * self.args.target_kl:
+    #                     break
+    #             if self.args.target_kl is not None and approx_kl_running > 1.5 * self.args.target_kl:
+    #                 break
+    #
+    #         self.ct.get_end_time(time.time())
+    #         print(f'get total time {self.ct.get_total_time():.2f}s')
+    #         self.print(f"[Epoch {epoch+1}/{self.args.total_epochs}] , KL~{approx_kl_running:.5f}")
+    #
+    #         if (epoch + 1) % self.args.eval_every == 0:
+    #             self.evaluate()
+    #             # self.print(f"  Eval: return mean {mean_r:.4f} ± {std_r:.4f}")
+
+    # # ---------- internals ----------
+    # @torch.no_grad()
+    # def _rollout(self, env: EnvBase, T: int, B: int) -> Dict[str, torch.Tensor]:
+    #     device = torch.device(self.args.device)
+    #     td = env.reset()
+    #     obs = torch.zeros(T+1, B, self.args.obs_dim, device=device)
+    #     act = torch.zeros(T,   B, self.args.S, self.args.Q, device=device)
+    #     logp= torch.zeros(T,   B, device=device)
+    #     rew = torch.zeros(T,   B, device=device)
+    #     done= torch.zeros(T,   B, device=device)
+    #     val = torch.zeros(T+1, B, device=device)
+    #
+    #     obs[0] = td['obs'].to(device)
+    #     for t in range(T):
+    #         logits, v = self.policy(obs[t])
+    #
+    #         # value 反标尺
+    #         if self.args.rescale_value:
+    #             v = v * self.returns_std + self.returns_mean
+    #
+    #         # 概率
+    #         probs = self._wc_probs_from_logits_obs(logits, obs[t])
+    #
+    #         # 采样/贪心（与 WC_Policy.randomize 一致）
+    #         if self.args.randomize:
+    #             dist = OneHotCategorical(probs=probs)  # 一次性 over [B,S,Q] → 需按 S 拆分，简化用逐S采样：
+    #             # OneHotCategorical 只支持最后一维，这里手动逐S采样：
+    #             a, lp = self._sample_and_logp(probs)
+    #         else:
+    #             a, lp = self._argmax_and_logp(probs)
+    #
+    #         val[t] = v
+    #         act[t] = a
+    #         logp[t] = lp
+    #
+    #         out = env.step(TensorDict({"action": a.to(env.device)}, batch_size=[B]))
+    #         nxt = out["next"]
+    #         obs[t + 1] = nxt["obs"].to(device)
+    #         rew[t] = nxt["reward"].reshape(B).to(device)
+    #         done[t] = nxt["done"].reshape(B).to(device)
+    #
+    #     _, v_last = self.policy(obs[-1])
+    #     if self.args.rescale_value:
+    #         v_last = v_last * self.returns_std + self.returns_mean
+    #     val[-1] = v_last
+    #     return {"obs": obs, "act": act, "logp": logp, "rew": rew, "done": done, "val": val}
+
     # ---------- Learn ----------
     def learn(self):
-        # self.print("Start training (TorchRL GPU-optimized)")
+        self.print("Start training (TorchRL GPU-optimized)")
         for epoch in range(self.args.total_epochs):
             t0 = time.time()
 
@@ -253,39 +395,16 @@ class PPOTrainerTorchRL:
                     ent = self._entropy(probs).mean()
                     value_loss = F.mse_loss(v_pred, ret_mb)
 
-                    # [MOD] —— 将 KL 的计算提前到 optimizer.step() 之前，用于“是否跳过该 minibatch”的判断
-                    with torch.no_grad():
-                        log_ratio = new_logp - old_logp
-                        approx_kl = torch.mean((torch.exp(log_ratio) - 1) - log_ratio).clamp_min(0).item()
-                        approx_kl_running = 0.9 * approx_kl_running + 0.1 * approx_kl
+                    # self.opt_pi.zero_grad(set_to_none=True)
+                    # (policy_loss - self.args.ent_coef * ent).backward(retain_graph=True)
+                    # nn.utils.clip_grad_norm_(self.policy.parameters(), self.args.max_grad_norm)
+                    # self.opt_pi.step()
+                    #
+                    # self.opt_v.zero_grad(set_to_none=True)
+                    # (self.args.vf_coef * value_loss).backward()
+                    # nn.utils.clip_grad_norm_(self.policy.parameters(), self.args.max_grad_norm)
+                    # self.opt_v.step()
 
-                    # [MOD] —— 若 KL 过大：将当前 lr 在原值基础上减去 1e-4（不低于 min_lr），清空梯度并跳过本次更新
-                    # if self.args.target_kl and approx_kl_running > 1.5 * self.args.target_kl:
-                    if approx_kl > 1.5 * self.args.target_kl:
-
-                        # 降 policy lr
-                        for pg in self.opt_pi.param_groups:
-                            old_lr = pg["lr"]
-                            new_lr = max(old_lr - 1e-4, self.args.min_lr_policy)
-                            pg["lr"] = new_lr
-                        # # 降 value lr
-                        # for pg in self.opt_v.param_groups:
-                        #     old_lr = pg["lr"]
-                        #     new_lr = max(old_lr - 1e-4, self.args.min_lr_value)
-                        #     pg["lr"] = new_lr
-
-                        # 跳过该 minibatch：不做 backward/step，不推进 scheduler
-                        self.opt_pi.zero_grad(set_to_none=True)
-                        self.opt_v.zero_grad(set_to_none=True)
-                        # self.print(
-                        #     f"[AutoLR] KL {approx_kl_running:.4g} > {1.5 * self.args.target_kl:.4g} → "
-                        #     f"decrease lr by 1e-4 → "
-                        #     f"π:{self.opt_pi.param_groups[0]['lr']:.6f}, "
-                        #     f"V:{self.opt_v.param_groups[0]['lr']:.6f}. Skip minibatch."
-                        # )
-                        continue  # [MOD] —— 关键：跳过当前 minibatch
-
-                    # ===== 正常更新路径（KL 未超阈）=====
                     total_loss = (policy_loss - self.args.ent_coef * ent) + (self.args.vf_coef * value_loss)
                     self.opt_pi.zero_grad(set_to_none=True)
                     self.opt_v.zero_grad(set_to_none=True)
@@ -294,10 +413,13 @@ class PPOTrainerTorchRL:
                     self.opt_pi.step()
                     self.opt_v.step()
 
-                    # 基于进度的 LR 调度（warmup→余弦），保持不变
                     self._lr_step()
 
-                # 保留原有的外层 KL 早停（可选）
+                    with torch.no_grad():
+                        log_ratio = new_logp - old_logp
+                        approx_kl = torch.mean((torch.exp(log_ratio) - 1) - log_ratio).clamp_min(0).item()
+                        approx_kl_running = 0.9 * approx_kl_running + 0.1 * approx_kl
+
                 if self.args.target_kl and approx_kl_running > 1.5 * self.args.target_kl:
                     break
 
@@ -307,6 +429,7 @@ class PPOTrainerTorchRL:
 
             if (epoch + 1) % self.args.eval_every == 0:
                 self.evaluate()
+
 
     # ---------- Rollout ----------
     @torch.no_grad()
@@ -362,7 +485,14 @@ class PPOTrainerTorchRL:
         return {"obs": obs, "act": act, "logp": logp, "rew": rew, "done": done, "val": val}
 
     def _wc_probs_from_logits_obs(self, logits: torch.Tensor, obs: torch.Tensor) -> torch.Tensor:
-
+        """
+        与 WC_Policy 一致的概率构造：
+          action = logits.view(B,S,Q) → softmax(dim=-1)
+          * network_mask
+          min(·, queues)     (若 time_f=True，queues = obs[..., :Q])
+          若一行全 0 → 回退 network_mask
+          行归一化
+        """
         B, S, Q = logits.shape
         probs = F.softmax(logits, dim=-1)                  # [B,S,Q]
         probs = probs * self.network_mask.to(probs.device) # 掩码
@@ -377,6 +507,19 @@ class PPOTrainerTorchRL:
         probs = probs / probs.sum(dim=-1, keepdim=True).clamp_min(1e-12)
         return probs
 
+    # def _sample_and_logp_vec(self, probs: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+    #     """
+    #     独立 S 个 Categorical 的采样与 log_prob 和（与你代码一致）
+    #     """
+    #     B, S, Q = probs.shape
+    #     a = torch.zeros(B, S, Q, device=probs.device)
+    #     logp = torch.zeros(B, device=probs.device)
+    #     for s in range(S):
+    #         cat = Categorical(probs=probs[:, s, :])
+    #         idx = cat.sample()            # [B]
+    #         a[torch.arange(B), s, idx] = 1.0
+    #         logp += cat.log_prob(idx)
+    #     return a, logp
     def _sample_and_logp_vec(self, probs):  # probs: [B,S,Q]
         B, S, Q = probs.shape
         flat = probs.reshape(B * S, Q)
@@ -499,7 +642,21 @@ class PPOTrainerTorchRL:
 
             # 右端点：使用 next 的队列
             queues_next = nxt["obs"][:, :Q].to(device)
-            dt = nxt["event_time"].reshape(B).to(device)
+            dt = nxt["event_time"].reshape(B).to(device)  # [B]
+            # if "queues" in nxt.keys():
+            #     queues_next = nxt["queues"][:, :Q].to(device)  # [B,Q]
+            # else:
+            #     # 若环境未显式提供 queues，就从 next.obs 里取前 Q 维
+            #     queues_next = nxt["obs"][:, :Q].to(device)
+            #
+            # # 步长 Δt：优先 next.event_time，其次用 time 差，最后退化为 1
+            # if "event_time" in nxt.keys():
+            #     dt = nxt["event_time"].reshape(B).to(device)  # [B]
+            # elif "time" in nxt.keys() and "time" in td.keys():
+            #     dt = (nxt["time"].reshape(B).to(device) - td["time"].reshape(B).to(device)).clamp_min(0)
+            # else:
+            #     dt = torch.ones(B, device=device)
+
             # 时间积分：与之前 test_epoch 完全一致的形式
             time_weight_queue_len += queues_next * dt.view(B, 1)  # [B,Q]
             time_now += dt  # [B]
@@ -521,3 +678,79 @@ class PPOTrainerTorchRL:
         self.print(f"Eval (B={B}): queue length mean (overall): {qlen_mean.item():.4f}")
         # self.print(f"std (overall): {qlen_std.item():.4f}")
         self.print(f"se (overall): {qlen_se.item():.4f}")
+
+        # 若你仍想保持原函数返回 (mean return, std return)：
+        # ret_mean = total_r.mean().item()
+        # ret_std = total_r.std(unbiased=True).item()
+        # return ret_mean, ret_std
+
+    # @torch.no_grad()
+    # def evaluate(self) -> Tuple[float, float]:
+    #     device = torch.device(self.args.device)
+    #     td = self.eval_env.reset()
+    #     B = self.args.test_batch
+    #
+    #     total_r = torch.zeros(B, device=device)
+    #
+    #     # 收集用于统计的序列
+    #     qlens_list = []   # 每步的每个样本的 queue length，shape 累积成 [T, B]
+    #     costs_list = []   # 同上，cost
+    #
+    #     for _ in range(self.args.eval_T):
+    #         obs_dev = td["obs"].to(device)  # [B, obs_dim]
+    #
+    #         # --- 队列长度：对 obs 的前 Q 维求和
+    #         Q = self.args.Q
+    #         queues = obs_dev[:, :Q]
+    #         qlen_t = queues.sum(dim=-1)  # [B]
+    #         qlens_list.append(qlen_t)
+    #
+    #         # --- 策略动作
+    #         logits, v = self.policy(obs_dev)
+    #         if self.args.rescale_value:
+    #             v = v * self.returns_std + self.returns_mean
+    #         probs = self._wc_probs_from_logits_obs(logits, obs_dev)
+    #         if self.args.randomize:
+    #             a, _ = self._sample_and_logp(probs)
+    #         else:
+    #             a, _ = self._argmax_and_logp(probs)
+    #
+    #         # --- 环境前进一步并记录 reward / cost
+    #         out = self.eval_env.step(TensorDict({"action": a.to(self.eval_env.device)}, batch_size=[B]))
+    #         nxt = out["next"]
+    #         r_t = nxt["reward"].reshape(B).to(device)
+    #         total_r += r_t
+    #
+    #         # cost 优先找显式 "cost"，否则假定 cost = -reward
+    #         if "cost" in nxt.keys():
+    #             c_t = nxt["cost"].reshape(B).to(device)
+    #         else:
+    #             c_t = -r_t
+    #         costs_list.append(c_t)
+    #
+    #         td = nxt
+    #
+    #     # --- 统计：对所有 T×B 样本取 mean 和标准误（SE = std / sqrt(N)）
+    #     T = self.args.eval_T
+    #     N = T * B
+    #
+    #     qlens = torch.stack(qlens_list, dim=0).reshape(N)      # [N]
+    #     costs = torch.stack(costs_list, dim=0).reshape(N)      # [N]
+    #
+    #     q_mean = qlens.mean().item()
+    #     # 使用无偏标准差做标准误：std(unbiased=True)/sqrt(N)
+    #     q_se = (qlens.std(unbiased=True) / math.sqrt(max(1, N))).item()
+    #
+    #     cost_mean = costs.mean().item()
+    #     cost_se = (costs.std(unbiased=True) / math.sqrt(max(1, N))).item()
+    #
+    #     # 原来的 return 统计
+    #     ret_mean = total_r.mean().item()
+    #     ret_std  = total_r.std(unbiased=True).item()
+    #
+    #     # 这里打印新增统计信息；返回值保持原样 (ret_mean, ret_std)
+    #     self.print(f"  Eval (T={T}, B={B}): "
+    #                f"queue mean {q_mean:.4f}, SE {q_se:.4f} | "
+    #                f"cost mean {cost_mean:.4f}, SE {cost_se:.4f}")
+    #
+    #     return ret_mean, ret_std
