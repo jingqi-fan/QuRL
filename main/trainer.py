@@ -11,8 +11,8 @@ from utils.switchplot import create_plot_dir, create_loss_dir
 # 如果你用到了 rt.*（pad_pool / Sinkhorn / linear_assignment_batch），请确保导入：
 # import your_runtime_lib as rt
 
-# from main.env import BatchedDiffDES
-from main.env_s import BatchedDiffDES
+from main.env import BatchedDiffDES
+# from main.env_s import BatchedDiffDES
 import utils.routing as rt
 
 class Trainer:
