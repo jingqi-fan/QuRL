@@ -1,4 +1,5 @@
 # trainer_vectorized.py
+import numpy as np
 from tqdm import trange
 import torch
 import torch.nn.functional as F
@@ -178,6 +179,7 @@ class Trainer:
         S = dq.S
         Q = dq.Q
 
+        action_history = []
         with torch.no_grad():
             pbar = trange(self.env_config['test_T'],
                           desc=f"{datetime.now().strftime('%Y-%m-%d-%H-%M-%S')} - {self.experiment_name}",
@@ -233,6 +235,7 @@ class Trainer:
 
                 # 测试时你原来做的是四舍五入为整数名额
                 action = torch.round(pr)
+                action_history.append(action.detach().cpu())
 
                 out = dq.step(TensorDict({"action": action}, batch_size=[B_test]))
                 # 奖励 / 代价
@@ -240,6 +243,7 @@ class Trainer:
                 time_weight_queue_len += out["next", "queues"] * out["next", "event_time"]
                 td = out["next"].select("queues", "time")
 
+        np.save("action_history.npy", torch.stack(action_history).numpy())
         # -------- 汇总测试指标 --------
         time_now = td["time"]  # [B,1]
         cost_per_env = (total_cost / time_now).squeeze(-1)  # [B]
