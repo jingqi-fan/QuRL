@@ -2,7 +2,7 @@ import os
 import numpy as np
 
 current_dir = os.getcwd()
-fname = 'reentrant_2_delta.npy'
+fname = 'reentrant_2_mu.npy'
 path = os.path.join(current_dir, fname)
 data = np.load(path, allow_pickle=True)
 print(f"📁 文件名: {fname}")

@@ -299,7 +299,7 @@ class BatchedDiffDES(EnvBase):
         # else:
         #     delta_q = outcome @ self.event_map_full2
 
-        delta_q = outcome @ self.event_map_full
+        delta_q = outcome @ self.event_map_full2
 
         job_counts = job_counts + delta_q
 

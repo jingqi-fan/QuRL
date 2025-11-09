@@ -43,7 +43,7 @@ def make_samplers(cfg, Q, device):
 # ---------- 主测试逻辑 ----------
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--yaml", type=str, default="n_model_mm_5.yaml",
+    parser.add_argument("--yaml", type=str, default="reentrant_2.yaml",
                         help="同目录下的 YAML 文件名")
     parser.add_argument("--steps", type=int, default=None,
                         help="仿真步数；默认用 YAML 中的 train_T")
@@ -104,8 +104,8 @@ def main():
     B = 1
     for t in range(1, steps + 1):
         # 随机动作：[B,S,Q]；环境内部会按 server 维对 Q 做归一化
-        # action = torch.rand(B, S, Q, device=device)
-        action = torch.randint(0, 2, (B, S, Q), device=device)
+        action = torch.rand(B, S, Q, device=device)
+        # action = torch.randint(0, 2, (B, S, Q), device=device)
 
         # 组装输入 TensorDict
         step_in = td.clone() if hasattr(td, "clone") else td

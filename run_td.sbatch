@@ -109,17 +109,13 @@ run() {
 #run cmuq_s         en_model_mm_200
 #run max_pressure_s en_model_mm_200
 
-run cmu          reentrant_4
-run cmuq         reentrant_4
-run max_pressure reentrant_4
+run cmu          reentrant_2
+run cmuq         reentrant_2
+run max_pressure reentrant_2
 
-#run cmu          reentrant_2
-#run cmuq         reentrant_2
-#run max_pressure reentrant_2
-#
-#run cmu          reentrant_2f
-#run cmuq         reentrant_2f
-#run max_pressure reentrant_2f
+run cmu          reentrant_2f
+run cmuq         reentrant_2f
+run max_pressure reentrant_2f
 
 # 如果以后要并行跑（同一作业里开多个进程），改成：
 # srun --exclusive -N1 -n1 bash -lc 'cd "$PROJ" && '"$PY"' -m main.run_comparison cmu  n_model_mm_50' &
