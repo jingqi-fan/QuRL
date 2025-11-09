@@ -111,7 +111,7 @@ run() {
 
 run cmu          reentrant_2
 run cmuq         reentrant_2
-#run max_pressure reentrant_2
+run max_pressure reentrant_2
 #
 #run cmu          reentrant_2f
 #run cmuq         reentrant_2f

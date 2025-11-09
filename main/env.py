@@ -249,11 +249,11 @@ class BatchedDiffDES(EnvBase):
 
         # === 动作裁剪与归一（只对“在服人数”限流） ===
         action = tensordict["action"].to(dev).float()  # [B,S,Q]
-        net = self.network.view(1, S, Q)
-        action = torch.clamp(action * net, min=0.0)
-        action = torch.minimum(action, job_counts.unsqueeze(1).expand(-1, S, -1))
-        per_server_sum = action.sum(dim=2, keepdim=True).clamp_min(1e-8)
-        action = action / per_server_sum
+        # net = self.network.view(1, S, Q)
+        # action = torch.clamp(action * net, min=0.0)
+        # action = torch.minimum(action, job_counts.unsqueeze(1).expand(-1, S, -1))
+        # per_server_sum = action.sum(dim=2, keepdim=True).clamp_min(1e-8)
+        # action = action / per_server_sum
 
         # === 分配服务率（仅对前 job_counts 个槽位） ===
         job_rates, num_alloc = self._alloc_job_rates_and_counts(
