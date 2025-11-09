@@ -9,5 +9,6 @@ queue_event_options: 'custom'
 train_T: 30000
 test_T: 80000
 num_pool: 1
+queue_event_options2: 'custom'
 
   
