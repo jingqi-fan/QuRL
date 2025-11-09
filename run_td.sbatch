@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH -J qgym_gpu_td
 #SBATCH -o slurm-%j.out
-#SBATCH --time=01:00:00
+#SBATCH --time=00:10:00
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=64G
@@ -111,11 +111,11 @@ run() {
 
 run cmu          reentrant_2
 run cmuq         reentrant_2
-run max_pressure reentrant_2
-
-run cmu          reentrant_2f
-run cmuq         reentrant_2f
-run max_pressure reentrant_2f
+#run max_pressure reentrant_2
+#
+#run cmu          reentrant_2f
+#run cmuq         reentrant_2f
+#run max_pressure reentrant_2f
 
 # 如果以后要并行跑（同一作业里开多个进程），改成：
 # srun --exclusive -N1 -n1 bash -lc 'cd "$PROJ" && '"$PY"' -m main.run_comparison cmu  n_model_mm_50' &
