@@ -54,7 +54,7 @@ class Trainer:
             device=self.device,
             draw_service=self.draw_service,
             draw_inter_arrivals=self.draw_inter_arrivals,
-            draw_due_date=self.draw_due_date,
+            # draw_due_date=self.draw_due_date,
             reentrant=self.env_config.get('reentrant', 0)
         )
 
@@ -166,7 +166,7 @@ class Trainer:
             device=self.device,
             draw_service=self.draw_service,
             draw_inter_arrivals=self.draw_inter_arrivals,
-            draw_due_date=self.draw_due_date,
+            # draw_due_date=self.draw_due_date,
             reentrant=self.env_config.get('reentrant', 0)
         )
 
