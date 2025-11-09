@@ -4,8 +4,8 @@ env:
   env_temp: 1
   straight_through_min: True
   model_seed: 100
-  test_seed: 42
-  train_seed: 42
+  test_seed: 43
+  train_seed: 43
   print_grads: True
   test_restart: True
   test_freq: 25
