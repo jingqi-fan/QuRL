@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH -J qgym_gpu_td
 #SBATCH -o slurm-%j.out
-#SBATCH --time=03:00:00
+#SBATCH --time=01:00:00
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=64G
