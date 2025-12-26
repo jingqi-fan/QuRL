@@ -118,6 +118,8 @@ runs() {
 
 runs WC.yaml          n_model_mm_200
 runs WC2.yaml          n_model_mm_200
+runs WC.yaml          n_model_mm_10
+runs WC2.yaml          n_model_mm_10
 #runs pathwise.yaml          reentrant_2
 #runs pathwise.yaml          reentrant_2f
 #runs vanilla.yaml          reentrant_2
