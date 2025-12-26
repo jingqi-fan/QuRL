@@ -28,8 +28,13 @@ training:
   num_epochs: 50
   train_batch: 50
   test_batch: 50
-#  lr: 0.0025
-  lr_policy: 0.0004
+#  actors: 1
+#  episode_steps: 16
+#  num_epochs: 2
+#  train_batch: 2
+#  test_batch: 2
+#  lr: 0.0003
+  lr_policy: 0.0008
   lr_value: 0.0003
   min_lr_policy: 0.00001
   min_lr_value: 0.00001

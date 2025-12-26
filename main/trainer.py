@@ -180,6 +180,7 @@ class Trainer:
         Q = dq.Q
 
         action_history = []
+        pr_history = []
         with torch.no_grad():
             pbar = trange(self.env_config['test_T'],
                           desc=f"{datetime.now().strftime('%Y-%m-%d-%H-%M-%S')} - {self.experiment_name}",
@@ -199,6 +200,7 @@ class Trainer:
                     step, queues, time,
                     repeated_queue, repeated_network, repeated_mu, repeated_h
                 )
+                # pr_history.append(pr.detach().cpu())
 
                 pr = pr.repeat_interleave(1, dim=1)  # 如果你需要保持一致；否则可以去掉
 
@@ -233,8 +235,10 @@ class Trainer:
                     pr = torch.minimum(pr, queues.unsqueeze(1).expand(-1, S, -1)).clamp_min(1e-4)
                     pr = pr / (pr.sum(dim=-1, keepdim=True) + 1e-8)
 
+                pr_history.append(pr.detach().cpu())
                 # 测试时你原来做的是四舍五入为整数名额
                 action = torch.round(pr)
+                # print(f'action: {action}')
                 action_history.append(action.detach().cpu())
 
                 out = dq.step(TensorDict({"action": action}, batch_size=[B_test]))
@@ -243,7 +247,8 @@ class Trainer:
                 time_weight_queue_len += out["next", "queues"] * out["next", "event_time"]
                 td = out["next"].select("queues", "time")
 
-        np.save("action_history.npy", torch.stack(action_history).numpy())
+        # np.save("action_history.npy", torch.stack(action_history).numpy())
+        np.save("pr_history.npy", torch.stack(pr_history).numpy())
         # -------- 汇总测试指标 --------
         time_now = td["time"]  # [B,1]
         cost_per_env = (total_cost / time_now).squeeze(-1)  # [B]

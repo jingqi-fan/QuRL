@@ -32,7 +32,7 @@ scp -P 32077 -r root@123.37.6.118:/root/QGymGPU/results/rl/ ./rl_results
 
 ps -p 675763 -o pid,cmd
 scp -r jf5524@greene.hpc.nyu.edu:/scratch/jf5524/QGymGPU/results/ .
-scp -r jf5524@greene.hpc.nyu.edu:/scratch/jf5524/QGymGPU/results/cla/ .
+scp -r jf5524@greene.hpc.nyu.edu:/scratch/jf5524/QGymGPU/main/ .
 scp -r jf5524@greene.hpc.nyu.edu:/scratch/jf5524/QGymGPU/results/rl/ .
 
 1017_1258_pathwise.yaml_en_model_mm_200.yaml
@@ -61,4 +61,5 @@ QGym:
 补充table re(0.9)
 +ref(0.9)
 
-1392475是跑了很久的vanilla 200
+
+ssh jf5524@greene.hpc.nyu.edu

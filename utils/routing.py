@@ -52,28 +52,69 @@ def linear_assignment(values, servers, jobs):
     return torch.tensor(X)
 
 
-def linear_assignment_batch(values, s_bar, q_bar):
+# def linear_assignment_batch(values, s_bar, q_bar):
+#
+#     batch,s,q = values.size()
+#     action = []
+#
+#     for b in range(batch):
+#         v = values[b].numpy()
+#         servers = s_bar[b].numpy()
+#         jobs = q_bar[b].numpy()
+#
+#         A = match_constraint_mat(s, q).toarray()
+#         c = np.reshape(-v, s * q)
+#         b = np.append(servers, jobs)
+#
+#         res = opt.linprog(c=c,A_ub=A,b_ub=b, method = 'highs-ds')
+#         X = np.reshape(res.x, (s,q))
+#
+#         X = np.rint(X)[:s-1,:q-1].tolist()
+#         action.append(X)
+#
+#     return torch.tensor(action)
 
-    batch,s,q = values.size()
-    action = []
 
-    for b in range(batch):
-        v = values[b].numpy()
-        servers = s_bar[b].numpy()
-        jobs = q_bar[b].numpy()
+def linear_assignment_batch(values: torch.Tensor,
+                            s_bar: torch.Tensor,
+                            q_bar: torch.Tensor) -> torch.Tensor:
+    """
+    values: [B, S, Q]  代价/效用矩阵（这里按你原逻辑用 -v 做最小化）
+    s_bar : [B, S]     服务器容量
+    q_bar : [B, Q]     任务需求
+    return: [B, S-1, Q-1]  （与你原来切片保持一致）
+    """
+    assert values.ndim == 3, "values must be [B,S,Q]"
+    B, S, Q = values.size()
 
-        A = match_constraint_mat(s, q).toarray()
-        c = np.reshape(-v, s * q)
-        b = np.append(servers, jobs)
+    # 预先生成约束矩阵（只依赖 S,Q）
+    A = match_constraint_mat(S, Q).toarray()
 
-        res = opt.linprog(c=c,A_ub=A,b_ub=b, method = 'highs-ds')
-        X = np.reshape(res.x, (s,q))
+    actions = []
+    for b_idx in range(B):
+        # --- 全部搬到 CPU 再转 numpy ---
+        v = values[b_idx].detach().cpu().numpy()     # [S,Q]
+        servers = s_bar[b_idx].detach().cpu().numpy()  # [S]
+        jobs = q_bar[b_idx].detach().cpu().numpy()     # [Q]
 
-        X = np.rint(X)[:s-1,:q-1].tolist()
-        action.append(X)
-    
-    return torch.tensor(action)
+        # 线性规划：最小化 c^T x，约束 A_ub x <= b_ub，x >= 0
+        c = np.reshape(-v, S * Q)              # 你的原逻辑：对 v 取负做最小化
+        bvec = np.append(servers, jobs)        # 注意改名，避免覆盖 batch 索引 b
 
+        # bounds 设置非负
+        res = opt.linprog(c=c, A_ub=A, b_ub=bvec, bounds=(0, None), method='highs-ds')
+
+        if not res.success:
+            raise RuntimeError(f"[linear_assignment_batch] linprog failed at batch {b_idx}: {res.message}")
+
+        X = np.reshape(res.x, (S, Q))          # 回到 [S, Q]
+        X = np.rint(X)[:S-1, :Q-1]             # 与你原实现一致
+        actions.append(torch.from_numpy(X))    # 暂时在 CPU 上累积
+
+    # 堆叠回 batch，并放回与输入相同的 device / dtype
+    out = torch.stack(actions, dim=0)          # [B, S-1, Q-1]
+    out = out.to(device=values.device, dtype=values.dtype)
+    return out
 
 def pad(vals, queues, network, 
         device = 'cpu', compliance = True):
