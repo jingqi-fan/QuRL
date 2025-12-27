@@ -7,6 +7,6 @@ h: [0.26520305817215195, 0.7840706019485694, 0.4550083673391433, 0.4230074859901
 init_queues: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
 queue_event_options: null
 queue_event_options2: null
-train_T: 5000
-test_T: 5000
+train_T: 5
+test_T: 5
 num_pool: 1
