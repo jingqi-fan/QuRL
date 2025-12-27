@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH -J qgym_gpu_td
 #SBATCH -o slurm-%j.out
-#SBATCH --time=09:00:00
+#SBATCH --time=10:00:00
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=64G
@@ -77,25 +77,13 @@ run() {
 #run cmu          n_model_mm_200
 #run cmu         en_model_mm_100
 #run cmu         en_model_mm_200
+
 run cmu          n_model_mm_10
-#run cmuq         n_model_mm_10
-#run max_pressure n_model_mm_10
-
 run cmu          n_model_mm_50
-#run cmuq         n_model_mm_50
-#run max_pressure n_model_mm_50
-
 run cmu          n_model_mm_100
-#run cmuq         n_model_mm_100
-#run max_pressure n_model_mm_100
-
 run cmu          n_model_mm_200
-#run cmuq         n_model_mm_200
-#run max_pressure n_model_mm_200
-#
-#run cmu          en_model_mm_10
-#run cmuq         en_model_mm_10
-#run max_pressure en_model_mm_10
+
+
 #
 #run cmu          en_model_mm_50
 #run cmuq         en_model_mm_50
