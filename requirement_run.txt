@@ -45,7 +45,7 @@ squeue -u $USER
 查看某作业详情
 scontrol show job 1761408
 查看作业输出内容
-cat slurm-3777289.out
+cat slurm-3777313.out
 删掉当前用户的所有运行脚本！！！
 scancel -u $USER
 
@@ -69,19 +69,3 @@ ssh jf5524@greene.hpc.nyu.edu
 
 sbatch run_rl8.sbatch
 
-(base) [jf5524@log-3 QGymGPU]$ sbatch run_rl.sbatch
-Submitted batch job 3773048
-(base) [jf5524@log-3 QGymGPU]$ sbatch run_rl2.sbatch
-Submitted batch job 3773049
-(base) [jf5524@log-3 QGymGPU]$ sbatch run_rl3.sbatch
-Submitted batch job 3773050
-(base) [jf5524@log-3 QGymGPU]$ sbatch run_rl4.sbatch
-Submitted batch job 3773055
-(base) [jf5524@log-3 QGymGPU]$ sbatch run_rl5.sbatch
-Submitted batch job 3773057
-(base) [jf5524@log-3 QGymGPU]$ sbatch run_rl6.sbatch
-Submitted batch job 3773058
-(base) [jf5524@log-3 QGymGPU]$ sbatch run_rl7.sbatch
-Submitted batch job 3773059
-(base) [jf5524@log-3 QGymGPU]$ sbatch run_rl8.sbatch
-Submitted batch job 3773062
