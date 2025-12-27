@@ -69,49 +69,49 @@ run() {
 }
 
 ## ====== 串行跑多个实验（不需要 srun）======
-#run cmu_s          n_model_mm_10
+#run cmu          n_model_mm_10
 #run cmuq         reentrant_2f
 #run max_pressure reentrant_2f
 #
-#run cmu_s          n_model_mm_100
-#run cmu_s          n_model_mm_200
-#run cmu_s         en_model_mm_100
-#run cmu_s         en_model_mm_200
-#run cmu_s          n_model_mm_10
-#run cmuq_s         n_model_mm_10
-#run max_pressure_s n_model_mm_10
-#
-#run cmu_s          n_model_mm_50
-#run cmuq_s         n_model_mm_50
-#run max_pressure_s n_model_mm_50
-#
-#run cmu_s          n_model_mm_100
-#run cmuq_s         n_model_mm_100
-#run max_pressure_s n_model_mm_100
-#
-#run cmu_s          n_model_mm_200
-#run cmuq_s         n_model_mm_200
-#run max_pressure_s n_model_mm_200
-#
-#run cmu_s          en_model_mm_10
-#run cmuq_s         en_model_mm_10
-#run max_pressure_s en_model_mm_10
-#
-#run cmu_s          en_model_mm_50
-#run cmuq_s         en_model_mm_50
-#run max_pressure_s en_model_mm_50
-#
-#run cmu_s          en_model_mm_100
-#run cmuq_s         en_model_mm_100
-#run max_pressure_s en_model_mm_100
-#
-#run cmu_s          en_model_mm_200
-#run cmuq_s         en_model_mm_200
-#run max_pressure_s en_model_mm_200
+#run cmu          n_model_mm_100
+#run cmu          n_model_mm_200
+#run cmu         en_model_mm_100
+#run cmu         en_model_mm_200
+run cmu          n_model_mm_10
+#run cmuq         n_model_mm_10
+#run max_pressure n_model_mm_10
 
-run cmu          reentrant_2
-run cmuq         reentrant_2
-run max_pressure reentrant_2
+run cmu          n_model_mm_50
+#run cmuq         n_model_mm_50
+#run max_pressure n_model_mm_50
+
+run cmu          n_model_mm_100
+#run cmuq         n_model_mm_100
+#run max_pressure n_model_mm_100
+
+run cmu          n_model_mm_200
+#run cmuq         n_model_mm_200
+#run max_pressure n_model_mm_200
+#
+#run cmu          en_model_mm_10
+#run cmuq         en_model_mm_10
+#run max_pressure en_model_mm_10
+#
+#run cmu          en_model_mm_50
+#run cmuq         en_model_mm_50
+#run max_pressure en_model_mm_50
+#
+#run cmu          en_model_mm_100
+#run cmuq         en_model_mm_100
+#run max_pressure en_model_mm_100
+#
+#run cmu          en_model_mm_200
+#run cmuq         en_model_mm_200
+#run max_pressure en_model_mm_200
+
+#run cmu          reentrant_2
+#run cmuq         reentrant_2
+#run max_pressure reentrant_2
 #
 #run cmu          reentrant_2f
 #run cmuq         reentrant_2f
