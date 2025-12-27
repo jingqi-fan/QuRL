@@ -9,13 +9,13 @@ import numpy as np
 import yaml
 import torch
 
-from RL.PPO.trainer_pathwise import PathwiseTrainerTorchRL, PathwiseArgs
-# from RL.PPO.trainer_wc import PPOTrainerTorchRL, PPOArgs
-from RL.PPO.trainer_vanilla import PPOTrainerTorchRL_Vanilla
+from RL.PPO_multi_env.trainer_pathwise import PathwiseTrainerTorchRL, PathwiseArgs
+# from RL.PPO_multi_env.trainer_wc import PPOTrainerTorchRL, PPOArgs
+from RL.PPO_multi_env.trainer_vanilla import PPOTrainerTorchRL_Vanilla
 from RL.env.rl_env import RLViewDiffDES
 from RL.utils.count_time import count_time
 
-from RL.PPO.trainer_wc2 import PPOTrainerTorchRL, PPOArgs
+from RL.PPO_multi_env.trainer_wc2 import PPOTrainerTorchRL, PPOArgs
 
 def load_rl_env(seed, batch):
     # ---- 抽样器（回到 torch 张量） ----
@@ -78,119 +78,67 @@ def load_rl_env(seed, batch):
 
 
 def train_ppo():
+    # ---- multi-env: 外部创建 N 个 env，每个 env 内 batch=1（不多进程） ----
+    train_envs = []
+    for i in range(int(train_batch)):
+        env_i, train_act_spec, train_obs_dim = load_rl_env(train_seed + i, batch=1)
+        train_envs.append(env_i)
 
-    train_env, train_act_spec, train_obs_dim = load_rl_env(train_seed, train_batch)
-    eval_env, eval_act_spec, eval_obs_dim = load_rl_env(test_seed, test_batch)
+    eval_envs = []
+    for i in range(int(test_batch)):
+        env_i, eval_act_spec, eval_obs_dim = load_rl_env(test_seed + i, batch=1)
+        eval_envs.append(env_i)
 
-    # 2) 组装 Trainer 的参数（对齐你原来 SB3 的超参语义）
+    # 后面 args 不用改：train_batch/test_batch 仍表示“并行条数”
     ppo_args = PPOArgs(
         device=device,
         obs_dim=int(train_obs_dim),
         S=int(orig_s),
         Q=int(orig_q),
-        hidden=int(scale * int(np.sqrt(orig_q * orig_s))),  # 与原来 scale * sqrt(L*J) 对齐
-        # rollout
+        hidden=int(scale * int(np.sqrt(orig_q * orig_s))),
         episode_steps=int(episode_steps),
-        train_batch=int(train_batch),
-        test_batch=int(test_batch),
-        # PPO
+        train_batch=int(train_batch),   # 现在表示 env 数量
+        test_batch=int(test_batch),     # 现在表示 env 数量
         gamma=float(gamma),
         gae_lambda=float(gae_lambda),
-        clip_eps=0.2,  # 原来 SB3 里固定 0.2
+        clip_eps=0.2,
         ent_coef=float(ent_coef),
         vf_coef=float(vf_coef),
-        max_grad_norm=1.0,  # 与原来一致
+        max_grad_norm=1.0,
         ppo_epochs=int(ppo_epochs),
-        minibatch_size=int(ppo_batch_size),  # 原 config['training']['batch_size']
+        minibatch_size=int(ppo_batch_size),
         target_kl=(None if target_kl in [None, "None"] else float(target_kl)),
-        # LR（分别对 policy / value）
         lr_policy=float(lr_policy),
         lr_value=float(lr_value),
         min_lr_policy=float(min_lr_policy),
         min_lr_value=float(min_lr_value),
-        warmup=0.03,  # 与之前实现相同的 warmup 比例
-        # 训练轮次
+        warmup=0.03,
         total_epochs=int(num_epochs),
-        # 其他
         normalize_advantage=bool(normalize_advantage),
         rescale_value=bool(rescale_v),
         behavior_cloning=bool(bc),
-        bc_samples=1000,  # 与原 parallel_eval.BCD 一致
-        bc_lr=3e-4,  # 与原 BC 优化器一致
-        # 评估
-        eval_every=1,  # 每个 epoch 评估一次（原来每个 episode_steps 调一次）
+        bc_samples=1000,
+        bc_lr=3e-4,
+        eval_every=1,
         eval_T=int(test_T),
         randomize=randomize,
         time_f=time_f
     )
 
-    # 2) 组装 Trainer 的参数（对齐你原来 SB3 的超参语义）
-    pathwise_args = PathwiseArgs(
-        device=device,
-        obs_dim=int(train_obs_dim),
-        S=int(orig_s),
-        Q=int(orig_q),
-        hidden=int(scale * int(np.sqrt(orig_q * orig_s))),  # 与原来 scale * sqrt(L*J) 对齐
-        # rollout
-        episode_steps=int(episode_steps),
-        train_batch=int(train_batch),
-        test_batch=int(test_batch),
-        # PPO
-        gamma=float(gamma),
-        max_grad_norm=1.0,  # 与原来一致
-        # LR（分别对 policy / value）
-        lr_policy=float(lr_policy),
-        lr_value=float(lr_value),
-        min_lr_policy=float(min_lr_policy),
-        min_lr_value=float(min_lr_value),
-        warmup=0.03,  # 与之前实现相同的 warmup 比例
-        # 训练轮次
-        total_epochs=int(num_epochs),
-        rescale_value=bool(rescale_v),
-        behavior_cloning=bool(bc),
-        bc_samples=1000,  # 与原 parallel_eval.BCD 一致
-        bc_lr=3e-4,  # 与原 BC 优化器一致
-        # 评估
-        eval_every=1,  # 每个 epoch 评估一次（原来每个 episode_steps 调一次）
-        eval_T=int(test_T),
-        randomize=randomize,
-        tau=env_temp,
-        cost_is_negative_reward=False
-    )
     ct = count_time(time.time())
-    if policy_file_name == 'WC.yaml' or policy_file_name == 'WC':
-        # 运行 WC 的
-        trainer = PPOTrainerTorchRL(
-            train_env=train_env,
-            eval_env=eval_env,
-            args=ppo_args,
-            network_mask=network if network.dim() == 2 else network[0],  # [S,Q] or按需处理
-            ct=ct
-        )
-    elif policy_file_name == 'pathwise.yaml' or policy_file_name == 'pathwise':
-        # # 运行 pathwise 的
-        trainer = PathwiseTrainerTorchRL(
-            train_env=train_env,
-            eval_env=eval_env,
-            args=pathwise_args,
-            network_mask=network if network.dim() == 2 else network[0],  # [S,Q] or按需处理
-            ct=ct
-        )
-    else:
-        # # 运行 vanilla 和 vanilla bc 的
-        trainer = PPOTrainerTorchRL_Vanilla(
-            train_env=train_env,
-            eval_env=eval_env,
-            args=ppo_args,
-            # network_mask=network if network.dim() == 2 else network[0],  # [S,Q] or按需处理
-            ct=ct
-        )
 
+    # vanilla trainer：把 env list 传进去
+    trainer = PPOTrainerTorchRL_Vanilla(
+        train_env=train_envs,
+        eval_env=eval_envs,
+        args=ppo_args,
+        ct=ct
+    )
 
-    # 是否进行行为克隆预训练：由 config 控制（与原流程一致）
     if bc:
-        trainer.pre_train() # 可选：如果 policy_config['training']['behavior_cloning'] 为 True
+        trainer.pre_train()
     trainer.learn()
+
 
 
 if __name__ == "__main__":

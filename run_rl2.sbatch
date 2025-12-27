@@ -81,6 +81,20 @@ run() {
   info "END   $(date +'%F %T')  run: ${env_stub} ${tag}"
 }
 
+run_multi() {
+  local env_stub="$1"   # 例如: vanilla_bc.yaml
+  local tag="$2"        # 例如: n_model_mm_200
+  info "START $(date +'%F %T')  CWD=$(pwd)  run: ${env_stub} ${tag}"
+  # 回到项目根，保证相对路径正确
+  ( cd "$PROJ" && \
+    "$PY" -m RL.PPO_multi_env.train "${env_stub}" "${tag}" \
+      # 如需显式传绝对路径，可在 RL.PPO.train 支持的前提下加：
+      # --envs_dir    "${PROJ}/configs/env" \
+      # --logs_dir    "${PROJ}/results/cla"
+  ) || warn "experiment failed: ${env_stub} ${tag}"
+  info "END   $(date +'%F %T')  run: ${env_stub} ${tag}"
+}
+
 runs() {
   local env_stub="$1"   # 例如: vanilla_bc.yaml
   local tag="$2"        # 例如: n_model_mm_200
@@ -104,15 +118,16 @@ runs() {
 
 #run pathwise.yaml     reentrant_2
 ##
-run vanilla.yaml          n_model_mm_10
-run vanilla.yaml          n_model_mm_50
-run vanilla.yaml          n_model_mm_100
-run vanilla.yaml          n_model_mm_200
-
-run vanilla.yaml          en_model_mm_10
-run vanilla.yaml          en_model_mm_50
-run vanilla.yaml          en_model_mm_100
-run vanilla.yaml          en_model_mm_200
+run_multi vanilla.yaml          reentrant_2
+#run vanilla.yaml          n_model_mm_10
+#run vanilla.yaml          n_model_mm_50
+#run vanilla.yaml          n_model_mm_100
+#run vanilla.yaml          n_model_mm_200
+#
+#run vanilla.yaml          en_model_mm_10
+#run vanilla.yaml          en_model_mm_50
+#run vanilla.yaml          en_model_mm_100
+#run vanilla.yaml          en_model_mm_200
 
 #runs vanilla.yaml          reentrant_2
 #runs vanilla.yaml          reentrant_2f

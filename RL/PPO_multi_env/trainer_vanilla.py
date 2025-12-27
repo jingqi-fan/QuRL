@@ -1,7 +1,7 @@
 # vanilla_trainer_torchrl.py — TorchRL(0.6) 单环境-多batch，纯 softmax 策略
 import math, time
 from dataclasses import dataclass
-from typing import Optional, Tuple, Callable, Dict
+from typing import Optional, Tuple, Callable, Dict, Union, List
 
 import torch
 import torch.nn as nn
@@ -149,9 +149,10 @@ class PPOTrainerTorchRL_Vanilla:
       - 可选 value 反标尺
       - 保持 TorchRL 单环境 + 内部多 batch rollout
     """
+
     def __init__(self,
-                 train_env: EnvBase,
-                 eval_env: EnvBase,
+                 train_env: Union[EnvBase, List[EnvBase]],
+                 eval_env: Union[EnvBase, List[EnvBase]],
                  args: PPOArgs,
                  print_fn: Callable[[str], None] = print,
                  ct=None):
@@ -161,24 +162,23 @@ class PPOTrainerTorchRL_Vanilla:
         self.print = print_fn
         self.ct = ct
 
+        # 标记是否 multi-env（外部传入 env 列表）
+        self.is_multi_env = True
+
         device = torch.device(args.device)
         self.policy = ActorCritic(args.obs_dim, args.S, args.Q, args.hidden).to(device)
 
-        # separate optimizers
         self.opt_pi = torch.optim.Adam(self.policy.pi.parameters(), lr=args.lr_policy)
-        self.opt_v  = torch.optim.Adam(self.policy.v.parameters(),  lr=args.lr_value)
+        self.opt_v = torch.optim.Adam(self.policy.v.parameters(), lr=args.lr_value)
 
-        # SB3-style progress_remaining: 1.0 → 0.0
         self.total_updates = self._estimate_total_updates()
         self.update_idx = 0
 
-        # rollout returns stats for value rescale
         self.returns_mean = torch.tensor(0.0, device=device)
-        self.returns_std  = torch.tensor(1.0, device=device)
+        self.returns_std = torch.tensor(1.0, device=device)
 
-        # queue standardization (to mimic vanilla_policy)
         self.mean_queue = torch.tensor(0.0, device=device)
-        self.std_queue  = torch.tensor(1.0, device=device)
+        self.std_queue = torch.tensor(1.0, device=device)
 
     # ==== vanilla：队列标准化 ====
     def update_queue_stats(self, mean_queue_length: float, std_queue_length: float):
@@ -226,11 +226,95 @@ class PPOTrainerTorchRL_Vanilla:
         if self.args.behavior_cloning:
             self._behavior_cloning()
 
+    @torch.no_grad()
+    def _rollout_multi_env(self, envs, T: int) -> Dict[str, torch.Tensor]:
+        """
+        multi-env（无多进程）：
+        - envs: list of EnvBase, 每个 env 内部 batch=1
+        - B = len(envs) == args.train_batch
+        - policy forward batched 一次；env.step 逐个循环
+        """
+        device = torch.device(self.args.device)
+        B = len(envs)
+
+        obs = torch.zeros(T + 1, B, self.args.obs_dim, device=device)
+        act = torch.zeros(T, B, self.args.S, self.args.Q, device=device)
+        logp = torch.zeros(T, B, device=device)
+        rew = torch.zeros(T, B, device=device)
+        done = torch.zeros(T, B, device=device)
+        val = torch.zeros(T + 1, B, device=device)
+
+        # reset 每个 env
+        td_list = [e.reset() for e in envs]
+
+        # 取 obs（squeeze 掉 batch=1 的多余维）
+        obs0 = []
+        for td in td_list:
+            o = td["obs"]
+            if o.dim() > 1 and o.shape[0] == 1:
+                o = o.squeeze(0)
+            obs0.append(o)
+        obs[0] = torch.stack(obs0, dim=0)
+
+        for t in range(T):
+            std_o_t = self._standardize_queues(obs[t])
+            logits, v = self.policy(std_o_t)
+            if self.args.rescale_value:
+                v = v * self.returns_std + self.returns_mean
+
+            if self.args.randomize:
+                a, lp = self._sample_onehot_and_logp(logits)
+            else:
+                a, lp = self._argmax_onehot_and_logp(logits)
+
+            val[t] = v
+            act[t] = a
+            logp[t] = lp
+
+            # 逐 env step（无多进程）
+            next_obs_list = []
+            rew_list = []
+            done_list = []
+            next_td_list = []
+
+            for i, e in enumerate(envs):
+                a_i = a[i:i + 1]  # [1,S,Q]
+                out_i = e.step(TensorDict({"action": a_i}, batch_size=[1]))
+                nxt = out_i["next"]
+
+                o2 = nxt["obs"]
+                r2 = nxt["reward"]
+                d2 = nxt["done"]
+
+                # squeeze batch=1
+                if o2.dim() > 1 and o2.shape[0] == 1:
+                    o2 = o2.squeeze(0)
+                r2 = r2.reshape(1).squeeze(0)
+                d2 = d2.reshape(1).squeeze(0)
+
+                next_obs_list.append(o2)
+                rew_list.append(r2)
+                done_list.append(d2)
+                next_td_list.append(nxt)
+
+            obs[t + 1] = torch.stack(next_obs_list, dim=0)
+            rew[t] = torch.stack(rew_list, dim=0)
+            done[t] = torch.stack(done_list, dim=0)
+            td_list = next_td_list
+
+        std_o_last = self._standardize_queues(obs[-1])
+        _, v_last = self.policy(std_o_last)
+        if self.args.rescale_value:
+            v_last = v_last * self.returns_std + self.returns_mean
+        val[-1] = v_last
+
+        return {"obs": obs, "act": act, "logp": logp, "rew": rew, "done": done, "val": val}
+
     def learn(self):
         self.print("Start training (single-env, batched, vanilla)")
         for epoch in range(self.args.total_epochs):
             t0 = time.time()
-            traj = self._rollout(self.train_env, self.args.episode_steps, self.args.train_batch)
+            traj = self._rollout_multi_env(self.train_env, self.args.episode_steps)
 
             # GAE
             adv, ret = compute_gae(traj['rew'], traj['done'],
@@ -403,22 +487,97 @@ class PPOTrainerTorchRL_Vanilla:
     @torch.no_grad()
     def evaluate(self) -> Tuple[float, float]:
         device = torch.device(self.args.device)
+
+        # -------- multi-env 分支（无多进程）--------
+        if isinstance(self.eval_env, (list, tuple)):
+            envs = self.eval_env
+            B, Q = len(envs), self.args.Q
+
+            td_list = [e.reset() for e in envs]
+
+            # 初始 obs batch
+            obs0 = []
+            for td in td_list:
+                o = td["obs"]
+                if o.dim() > 1 and o.shape[0] == 1:
+                    o = o.squeeze(0)
+                obs0.append(o)
+            obs_b = torch.stack(obs0, dim=0)  # [B,obs_dim]
+
+            total_r = torch.zeros(B, device=device)
+            time_weight_queue_len = torch.zeros(B, Q, device=device)
+            time_weight_cost = torch.zeros(B, device=device)
+            time_now = torch.zeros(B, device=device)
+
+            for _ in range(self.args.eval_T):
+                std_obs = self._standardize_queues(obs_b)
+                logits, v = self.policy(std_obs)
+                if self.args.rescale_value:
+                    v = v * self.returns_std + self.returns_mean
+
+                if self.args.randomize:
+                    a, _ = self._sample_onehot_and_logp(logits)
+                else:
+                    a, _ = self._argmax_onehot_and_logp(logits)
+
+                next_obs_list = []
+                r_list = []
+                dt_list = []
+
+                for i, e in enumerate(envs):
+                    a_i = a[i:i + 1]
+                    out_i = e.step(TensorDict({"action": a_i}, batch_size=[1]))
+                    nxt = out_i["next"]
+
+                    r_t = nxt["reward"].reshape(1).squeeze(0)
+                    dt = nxt["event_time"].reshape(1).squeeze(0)
+
+                    o2 = nxt["obs"]
+                    if o2.dim() > 1 and o2.shape[0] == 1:
+                        o2 = o2.squeeze(0)
+
+                    next_obs_list.append(o2)
+                    r_list.append(r_t)
+                    dt_list.append(dt)
+
+                    td_list[i] = nxt
+
+                obs_b = torch.stack(next_obs_list, dim=0)  # [B,obs_dim]
+                r_b = torch.stack(r_list, dim=0)  # [B]
+                dt_b = torch.stack(dt_list, dim=0)  # [B]
+
+                total_r += r_b
+                queues_next = obs_b[:, :Q]  # [B,Q]
+                c_t = -r_b
+
+                time_weight_queue_len += queues_next * dt_b.view(B, 1)
+                time_weight_cost += c_t * dt_b
+                time_now += dt_b
+
+            qlen_per_env = time_weight_queue_len / time_now.view(B, 1).clamp_min(1e-12)
+            qlen_overall_per_env = qlen_per_env.mean(dim=1)
+
+            q_mean = qlen_overall_per_env.mean().item()
+            q_std = qlen_overall_per_env.std(unbiased=True)
+            q_se = (q_std / math.sqrt(B)).item()
+
+            self.print(f"Eval (B={B}): queue length mean (overall): {q_mean:.4f}")
+            self.print(f"se (overall): {q_se:.4f}")
+            return q_mean, q_se
+
+        # -------- 单 env（原逻辑）--------
         td = self.eval_env.reset()
         B, Q = self.args.test_batch, self.args.Q
 
         total_r = torch.zeros(B, device=device)
-
-        # —— 时间积分累积量
-        time_weight_queue_len = torch.zeros(B, Q, device=device)  # ∑(next_queues * dt)
-        time_weight_cost = torch.zeros(B, device=device)  # ∑(cost * dt)
-        time_now = torch.zeros(B, device=device)  # ∑ dt
+        time_weight_queue_len = torch.zeros(B, Q, device=device)
+        time_weight_cost = torch.zeros(B, device=device)
+        time_now = torch.zeros(B, device=device)
 
         for _ in range(self.args.eval_T):
-            # 标准化仅用于策略前向；统计一律用“右端点 next”
-            obs_raw = td["obs"]  # 已在 GPU
-            std_obs = self._standardize_queues(obs_raw)  # [B, obs_dim]
+            obs_raw = td["obs"]
+            std_obs = self._standardize_queues(obs_raw)
 
-            # 策略动作（logits → 向量化动作/对数概率）
             logits, v = self.policy(std_obs)
             if self.args.rescale_value:
                 v = v * self.returns_std + self.returns_mean
@@ -428,56 +587,32 @@ class PPOTrainerTorchRL_Vanilla:
             else:
                 a, _ = self._argmax_onehot_and_logp(logits)
 
-            # 环境前进一步（右端点统计）；不再 .to(self.eval_env.device)
             out = self.eval_env.step(TensorDict({"action": a}, batch_size=[B]))
             nxt = out["next"]
 
-            # 奖励累计（保持原有返回）
             r_t = nxt["reward"].reshape(B)
             total_r += r_t
 
-            # 步长 Δt：优先 event_time；其次 time 差；最后退化为 1
             dt = nxt["event_time"].reshape(B)
-            queues_next = nxt["obs"][:, :Q]  # [B,Q]
+            queues_next = nxt["obs"][:, :Q]
             c_t = -r_t
-            # if "event_time" in nxt.keys():
-            #     dt = nxt["event_time"].reshape(B)
-            # elif "time" in nxt.keys() and "time" in td.keys():
-            #     dt = (nxt["time"].reshape(B) - td["time"].reshape(B)).clamp_min(0)
-            # else:
-            #     dt = torch.ones(B, device=device)
-            #
-            # # 右端点队列（next）
-            # if "queues" in nxt.keys():
-            #     queues_next = nxt["queues"][:, :Q]  # [B,Q]
-            # else:
-            #     queues_next = nxt["obs"][:, :Q]     # [B,Q] 回退
 
-            # # 右端点 cost（若无 cost 则用 -reward）
-            # if "cost" in nxt.keys():
-            #     c_t = nxt["cost"].reshape(B)
-            # else:
-            #     c_t = -r_t
-
-            # —— 时间积分累计
-            time_weight_queue_len += queues_next * dt.view(B, 1)  # [B,Q]
-            time_weight_cost += c_t * dt  # [B]
-            time_now += dt  # [B]
+            time_weight_queue_len += queues_next * dt.view(B, 1)
+            time_weight_cost += c_t * dt
+            time_now += dt
 
             td = nxt
 
-        # —— 每并行环境的“每队列时间平均长度”：[B,Q]
         qlen_per_env = time_weight_queue_len / time_now.view(B, 1).clamp_min(1e-12)
-        # 与上面口径一致：对 Q 取均值得到“每环境的平均队列长度”：[B]
         qlen_overall_per_env = qlen_per_env.mean(dim=1)
 
-        # 跨 B 的统计
         q_mean = qlen_overall_per_env.mean().item()
         q_std = qlen_overall_per_env.std(unbiased=True)
         q_se = (q_std / math.sqrt(B)).item()
 
         self.print(f"Eval (B={B}): queue length mean (overall): {q_mean:.4f}")
         self.print(f"se (overall): {q_se:.4f}")
+        return q_mean, q_se
 
     def _lr_step(self):
         progress = self.update_idx / max(1, self.total_updates - 1)
