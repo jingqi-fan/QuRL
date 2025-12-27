@@ -193,20 +193,74 @@ class Trainer:
 
     # ------------------------------ 测试 ------------------------------ #
     def test_epoch(self, epoch):
-        # 这里的 B_test 语义变为：并行 env 个数（每个 env 内 batch=1）
         B_test = self.model_config["opt"]["test_batch"]
 
-        # 替代 dq.xxx：把环境参数张量准备好
+        # 环境参数（替代 dq.xxx）
         network = self.env_config["network"].to(self.device)  # [S,Q]
         mu = self.env_config["mu"].to(self.device)  # [S,Q]
         h = torch.tensor(self.env_config["h"], device=self.device).float()
         S, Q = network.shape
 
-        # 创建多个 env（不多进程），每个 env 内 batch 固定为 1
+        # ---- helper: 把 td 中字段 squeeze 到 policy 期望的维度 ----
+        def _squeeze_to_BQ(x: torch.Tensor) -> torch.Tensor:
+            """
+            目标：把 queues 变成 [B,Q]
+            允许输入：
+              [B,Q], [B,1,Q], [B,1,1,Q], [B,*,*,Q]（其中中间维多数为 1）
+            只 squeeze 中间为 1 的维度，不动 batch 维(0) 和最后一维(Q)。
+            """
+            if x.dim() < 2:
+                raise RuntimeError(f"queues dim < 2: shape={tuple(x.shape)}")
+
+            # 反复 squeeze 1..(dim-2) 中 size==1 的维度
+            # 用 while 是因为 squeeze 会改变维度编号
+            changed = True
+            while changed and x.dim() > 2:
+                changed = False
+                # 只检查中间维：1..dim-2
+                for d in range(1, x.dim() - 1):
+                    if x.size(d) == 1:
+                        x = x.squeeze(d)
+                        changed = True
+                        break
+
+            # 最终应为 [B,Q]
+            if x.dim() != 2:
+                raise RuntimeError(f"queues cannot be squeezed to [B,Q], got shape={tuple(x.shape)}")
+            return x
+
+        def _squeeze_to_B1(t: torch.Tensor) -> torch.Tensor:
+            """
+            目标：把 time 变成 [B,1]
+            允许输入：
+              [B,1], [B,1,1], [B,1,1,1] 等
+            """
+            if t.dim() < 2:
+                raise RuntimeError(f"time dim < 2: shape={tuple(t.shape)}")
+
+            # 保留最后一维=1
+            changed = True
+            while changed and t.dim() > 2:
+                changed = False
+                for d in range(1, t.dim() - 1):
+                    if t.size(d) == 1:
+                        t = t.squeeze(d)
+                        changed = True
+                        break
+
+            # 如果变成了 [B]，补回 [B,1]
+            if t.dim() == 1:
+                t = t.unsqueeze(-1)
+
+            if t.dim() != 2 or t.size(-1) != 1:
+                raise RuntimeError(f"time cannot be squeezed to [B,1], got shape={tuple(t.shape)}")
+            return t
+
+        # 创建多个 env（不多进程），每个 env 内 batch=1
         envs = self._make_envs(B_test, self.model_config["env"]["test_seed"])
         td_list = [env.reset(env.gen_params(batch_size=[1])) for env in envs]
 
-        # stack 成 batched TensorDict：batch_size=[B_test]
+        # stack 成 batch=[B_test]
         try:
             td = torch.stack(td_list, dim=0)
         except Exception:
@@ -225,17 +279,21 @@ class Trainer:
                 disable=True,  # <<< 强制关闭
                 leave=False,
             )
+
             for step in pbar:
-                queues = td["queues"]  # [B,Q]
-                time = td["time"]  # [B,1]
+                # 关键：把 queues/time 规范化，避免 [B,1,1,Q] 这类 shape
+                queues_raw = td["queues"]
+                time_raw = td["time"]
+
+                queues = _squeeze_to_BQ(queues_raw)  # [B,Q]
+                time = _squeeze_to_B1(time_raw)  # [B,1]
 
                 # 组装“重复版”输入，保持你原来的 policy 接口
                 repeated_queue = queues.unsqueeze(1).expand(-1, S, -1)  # [B,S,Q]
                 repeated_network = network.unsqueeze(0).expand(B_test, -1, -1)  # [B,S,Q]
                 repeated_mu = mu.unsqueeze(0).expand(B_test, -1, -1)  # [B,S,Q]
 
-                # 兼容你原来的 repeated_h 形状写法：dq.h.view(1,1,Q).expand(B,S,-1)
-                # 若你的 h 是 [S,Q]，这里取按 queue 维的权重（常见是 h 为 [Q] 或 [1,Q]）
+                # repeated_h：兼容你原来 dq.h.view(1,1,Q).expand(B,S,-1) 的用法
                 if h.dim() == 1:  # [Q]
                     h_q = h
                 elif h.dim() == 2:  # [S,Q] 或 [1,Q]
@@ -249,17 +307,15 @@ class Trainer:
                     repeated_queue, repeated_network, repeated_mu, repeated_h
                 )
 
-                pr = pr.repeat_interleave(1, dim=1)  # 保持一致；若不需要可去掉
+                pr = pr.repeat_interleave(1, dim=1)  # 保持一致（如无必要可去掉）
 
                 # ---- 测试策略分支（与你原代码一致） ----
                 if self.model_config["policy"]["test_policy"] == "sinkhorn":
                     lex = torch.zeros(B_test, S, Q, device=self.device)
                     v, s_bar, q_bar = rt.pad_pool(
-                        2 * pr + lex,
-                        queues.detach(),
-                        network=network,
-                        device=self.device,
-                        server_pool_size=self.env_config["server_pool_size"],
+                        2 * pr + lex, queues.detach(),
+                        network=network, device=self.device,
+                        server_pool_size=self.env_config["server_pool_size"]
                     )
                     pr = rt.Sinkhorn.apply(
                         -v, s_bar, q_bar,
@@ -267,17 +323,15 @@ class Trainer:
                         self.model_config["policy"]["sinkhorn"]["temp"],
                         self.model_config["policy"]["sinkhorn"]["eps"],
                         self.model_config["policy"]["sinkhorn"]["back_temp"],
-                        self.model_config["env"]["device"],
+                        self.model_config["env"]["device"]
                     )[:, :S, :Q]
 
                 elif self.model_config["policy"]["test_policy"] == "linear_assigment":
                     lex = torch.zeros(B_test, S, Q, device=self.device)
                     v, s_bar, q_bar = rt.pad_pool(
-                        2 * pr + lex,
-                        queues.detach(),
-                        network=network,
-                        device=self.device,
-                        server_pool_size=self.env_config["server_pool_size"],
+                        2 * pr + lex, queues.detach(),
+                        network=network, device=self.device,
+                        server_pool_size=self.env_config["server_pool_size"]
                     )
                     pr = rt.linear_assignment_batch(v, s_bar, q_bar)
 
@@ -297,7 +351,7 @@ class Trainer:
                 # 不多进程：逐 env step
                 out_list = []
                 for i, env in enumerate(envs):
-                    action_i = action[i: i + 1]  # [1,S,Q]
+                    action_i = action[i:i + 1]  # [1,S,Q]
                     out_i = env.step(TensorDict({"action": action_i}, batch_size=[1]))
                     out_list.append(out_i)
 
@@ -306,15 +360,12 @@ class Trainer:
                 except Exception:
                     out = TensorDict.stack(out_list, dim=0)
 
-                # 兼容你原先的字段命名：原来用 out["next", ...] / reward
-                # 这里假设 env.step 直接返回包含这些 key 的 TensorDict（通常为 cost/queues/event_time/time）
-                # 若你的 env.step 返回仍然是 ("next", ...) 结构，把下面的分支切到对应字段即可。
+                # 统计字段：优先兼容你原来的 ("next", ...) 结构；否则兼容 train 里那套
                 if ("next" in out.keys()) and ("reward" in out["next"].keys()):
                     total_cost += out["next", "reward"]
                     time_weight_queue_len += out["next", "queues"] * out["next", "event_time"]
                     td = out["next"].select("queues", "time")
                 else:
-                    # 与你 train_epoch 的字段一致：cost / queues / event_time / time
                     if "cost" in out.keys():
                         total_cost += out["cost"]
                     elif "reward" in out.keys():
@@ -328,8 +379,10 @@ class Trainer:
         # np.save("action_history.npy", torch.stack(action_history).numpy())
         np.save("pr_history.npy", torch.stack(pr_history).numpy())
 
-        # -------- 汇总测试指标（保持输出不变） --------
-        time_now = td["time"]  # [B,1]
+        # -------- 汇总测试指标（输出保持不变） --------
+        # 注意：这里 td["time"] 也可能有多余维度，做一次 squeeze 保障稳定
+        time_now = _squeeze_to_B1(td["time"])  # [B,1]
+
         cost_per_env = (total_cost / time_now).squeeze(-1)  # [B]
         test_cost_mean = cost_per_env.mean()
         test_cost_std = cost_per_env.std(unbiased=True)
