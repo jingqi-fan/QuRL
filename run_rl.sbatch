@@ -96,15 +96,15 @@ runs() {
 }
 
 # ====== 串行跑多个实验（不需要 srun）======
-runs WC.yaml          n_model_mm_10
-runs WC.yaml          n_model_mm_50
-runs WC.yaml          n_model_mm_100
-runs WC.yaml          n_model_mm_200
+run WC.yaml          n_model_mm_10
+run WC.yaml          n_model_mm_50
+run WC.yaml          n_model_mm_100
+run WC.yaml          n_model_mm_200
 
-runs WC.yaml          en_model_mm_10
-runs WC.yaml          en_model_mm_50
-runs WC.yaml          en_model_mm_100
-runs WC.yaml          en_model_mm_200
+run WC.yaml          en_model_mm_10
+run WC.yaml          en_model_mm_50
+run WC.yaml          en_model_mm_100
+run WC.yaml          en_model_mm_200
 
 #run WC.yaml          reentrant_2
 

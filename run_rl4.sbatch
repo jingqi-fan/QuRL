@@ -87,15 +87,15 @@ runs() {
 #run WC.yaml          en_model_50
 #run WC.yaml          en_model_100
 #run WC.yaml          en_model_200
-runs pathwise.yaml          n_model_mm_10
-runs pathwise.yaml          n_model_mm_50
-runs pathwise.yaml          n_model_mm_100
-runs pathwise.yaml          n_model_mm_200
+run pathwise.yaml          n_model_mm_10
+run pathwise.yaml          n_model_mm_50
+run pathwise.yaml          n_model_mm_100
+run pathwise.yaml          n_model_mm_200
 
-runs pathwise.yaml          en_model_mm_10
-runs pathwise.yaml          en_model_mm_50
-runs pathwise.yaml          en_model_mm_100
-runs pathwise.yaml          en_model_mm_200
+run pathwise.yaml          en_model_mm_10
+run pathwise.yaml          en_model_mm_50
+run pathwise.yaml          en_model_mm_100
+run pathwise.yaml          en_model_mm_200
 
 #runs pathwise.yaml          reentrant_2
 #runs pathwise.yaml          reentrant_2f

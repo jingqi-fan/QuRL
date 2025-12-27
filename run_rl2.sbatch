@@ -104,15 +104,15 @@ runs() {
 
 #run pathwise.yaml     reentrant_2
 ##
-runs vanilla.yaml          n_model_mm_10
-runs vanilla.yaml          n_model_mm_50
-runs vanilla.yaml          n_model_mm_100
-runs vanilla.yaml          n_model_mm_200
+run vanilla.yaml          n_model_mm_10
+run vanilla.yaml          n_model_mm_50
+run vanilla.yaml          n_model_mm_100
+run vanilla.yaml          n_model_mm_200
 
-runs vanilla.yaml          en_model_mm_10
-runs vanilla.yaml          en_model_mm_50
-runs vanilla.yaml          en_model_mm_100
-runs vanilla.yaml          en_model_mm_200
+run vanilla.yaml          en_model_mm_10
+run vanilla.yaml          en_model_mm_50
+run vanilla.yaml          en_model_mm_100
+run vanilla.yaml          en_model_mm_200
 
 #runs vanilla.yaml          reentrant_2
 #runs vanilla.yaml          reentrant_2f

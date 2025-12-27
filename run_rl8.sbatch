@@ -84,15 +84,15 @@ run() {
 #run vanilla.yaml          en_model_100
 #run vanilla.yaml          en_model_200
 
-runs pathwise_cpu_multi_batch.yaml          n_model_mm_10
-runs pathwise_cpu_multi_batch.yaml          n_model_mm_50
-runs pathwise_cpu_multi_batch.yaml          n_model_mm_100
-runs pathwise_cpu_multi_batch.yaml          n_model_mm_200
+run pathwise_cpu_multi_batch.yaml          n_model_mm_10
+run pathwise_cpu_multi_batch.yaml          n_model_mm_50
+run pathwise_cpu_multi_batch.yaml          n_model_mm_100
+run pathwise_cpu_multi_batch.yaml          n_model_mm_200
 
-runs pathwise_cpu_multi_batch.yaml          en_model_mm_10
-runs pathwise_cpu_multi_batch.yaml          en_model_mm_50
-runs pathwise_cpu_multi_batch.yaml          en_model_mm_100
-runs pathwise_cpu_multi_batch.yaml          en_model_mm_200
+run pathwise_cpu_multi_batch.yaml          en_model_mm_10
+run pathwise_cpu_multi_batch.yaml          en_model_mm_50
+run pathwise_cpu_multi_batch.yaml          en_model_mm_100
+run pathwise_cpu_multi_batch.yaml          en_model_mm_200
 
 # 如果以后要并行跑（同一作业里开多个进程），改成：
 # srun --exclusive -N1 -n1 bash -lc 'cd "$PROJ" && '"$PY"' -m main.run_comparison cmu  en_model_mm_50' &

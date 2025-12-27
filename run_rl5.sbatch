@@ -69,15 +69,15 @@ run() {
 
 
 # ====== 串行跑多个实验（不需要 srun）======
-runs WC_multi_batch.yaml          n_model_mm_10
-runs WC_multi_batch.yaml          n_model_mm_50
-runs WC_multi_batch.yaml          n_model_mm_100
-runs WC_multi_batch.yaml          n_model_mm_200
+run WC_cpu_multi_batch.yaml          n_model_mm_10
+run WC_cpu_multi_batch.yaml          n_model_mm_50
+run WC_cpu_multi_batch.yaml          n_model_mm_100
+run WC_cpu_multi_batch.yaml          n_model_mm_200
 
-runs WC_multi_batch.yaml          en_model_mm_10
-runs WC_multi_batch.yaml          en_model_mm_50
-runs WC_multi_batch.yaml          en_model_mm_100
-runs WC_multi_batch.yaml          en_model_mm_200
+run WC_cpu_multi_batch.yaml          en_model_mm_10
+run WC_cpu_multi_batch.yaml          en_model_mm_50
+run WC_cpu_multi_batch.yaml          en_model_mm_100
+run WC_cpu_multi_batch.yaml          en_model_mm_200
 
 #run pathwise.yaml          n_model_10
 #run pathwise.yaml          n_model_50

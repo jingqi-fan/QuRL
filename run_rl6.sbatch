@@ -79,15 +79,15 @@ run() {
 #run pathwise.yaml          en_model_100
 #run pathwise.yaml          en_model_200
 #
-runs vanilla_cpu_multi_batch.yaml          n_model_mm_10
-runs vanilla_cpu_multi_batch.yaml          n_model_mm_50
-runs vanilla_cpu_multi_batch.yaml          n_model_mm_100
-runs vanilla_cpu_multi_batch.yaml          n_model_mm_200
+run vanilla_cpu_multi_batch.yaml          n_model_mm_10
+run vanilla_cpu_multi_batch.yaml          n_model_mm_50
+run vanilla_cpu_multi_batch.yaml          n_model_mm_100
+run vanilla_cpu_multi_batch.yaml          n_model_mm_200
 
-runs vanilla_cpu_multi_batch.yaml          en_model_mm_10
-runs vanilla_cpu_multi_batch.yaml          en_model_mm_50
-runs vanilla_cpu_multi_batch.yaml          en_model_mm_100
-runs vanilla_cpu_multi_batch.yaml          en_model_mm_200
+run vanilla_cpu_multi_batch.yaml          en_model_mm_10
+run vanilla_cpu_multi_batch.yaml          en_model_mm_50
+run vanilla_cpu_multi_batch.yaml          en_model_mm_100
+run vanilla_cpu_multi_batch.yaml          en_model_mm_200
 
 #run vanilla_bc.yaml          en_model_10
 #run vanilla_bc.yaml          en_model_50
