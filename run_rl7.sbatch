@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH -J qgym_gpu_rl_n_model
 #SBATCH -o slurm-%j.out
-#SBATCH --time=08:00:00
+#SBATCH --time=19:00:00
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=64G
@@ -13,12 +13,12 @@ set -x
 module purge
 
 # ===== Python 解释器（不激活环境，直接用前缀）=====
-PY=/scratch/jf5524/conda/pt-cu121/bin/python
+PY=/scratch/jf5524/conda/py310/bin/python
 which "$PY"
 "$PY" -V
 
 # （可选）部分站点需要设置这些
-export CONDA_PREFIX=/scratch/jf5524/conda/pt-cu121
+export CONDA_PREFIX=/scratch/jf5524/conda/py310
 export LD_LIBRARY_PATH="${CONDA_PREFIX}/lib:${LD_LIBRARY_PATH:-}"
 
 # ========= 路径 =========
@@ -54,7 +54,7 @@ warn(){ echo "[WARN] $*" >&2; }
 info(){ echo "[INFO] $*"; }
 
 run() {
-  local env_stub="$1"   # 例如: vanilla_bc.yaml
+  local env_stub="$1"   # 例如: vanilla_bc_cpu_multi_batch.yaml
   local tag="$2"        # 例如: n_model_mm_200
   info "START $(date +'%F %T')  CWD=$(pwd)  run: ${env_stub} ${tag}"
   # 回到项目根，保证相对路径正确
@@ -84,10 +84,15 @@ run() {
 #run vanilla.yaml          n_model_100
 #run vanilla.yaml          n_model_200
 
-run vanilla_bc.yaml          n_model_mm_10
-run vanilla_bc.yaml          n_model_mm_50
-run vanilla_bc.yaml          n_model_mm_100
-run vanilla_bc.yaml          n_model_mm_200
+runs vanilla_bc_cpu_multi_batch.yaml          n_model_10
+runs vanilla_bc_cpu_multi_batch.yaml          n_model_50
+runs vanilla_bc_cpu_multi_batch.yaml          n_model_100
+runs vanilla_bc_cpu_multi_batch.yaml          n_model_200
+
+runs vanilla_bc_cpu_multi_batch.yaml          en_model_10
+runs vanilla_bc_cpu_multi_batch.yaml          en_model_50
+runs vanilla_bc_cpu_multi_batch.yaml          en_model_100
+runs vanilla_bc_cpu_multi_batch.yaml          en_model_200
 
 # 如果以后要并行跑（同一作业里开多个进程），改成：
 # srun --exclusive -N1 -n1 bash -lc 'cd "$PROJ" && '"$PY"' -m main.run_comparison cmu  n_model_mm_50' &

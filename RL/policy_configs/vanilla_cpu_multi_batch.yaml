@@ -1,6 +1,6 @@
 name: 'PPO'
 env:
-  device: 'cuda'
+  device: 'cpu'
   env_temp: 1.0
   straight_through_min: False
   model_seed: 100
@@ -8,12 +8,13 @@ env:
   train_seed: 3003
   randomize: True 
   time_f: False 
-  reward_scale: 1.0 
+  reward_scale: 1.0
+#  batch: 3
 model: 
   policy_name: "vanilla"
   scale: 10
 training:   
-  behavior_cloning: True
+  behavior_cloning: False
   normalize_advantage: True
   normalize_value: True
   normalize_reward: True
@@ -28,6 +29,11 @@ training:
   num_epochs: 50
   train_batch: 50
   test_batch: 50
+#  actors: 2
+#  episode_steps: 16
+#  num_epochs: 2
+#  train_batch: 2
+#  test_batch: 2
 #  lr: 0.0003
   lr_policy: 0.0008
   lr_value: 0.0003
@@ -47,4 +53,19 @@ plot:
   plot_policy_curve: True 
   inds: [0,1] 
   val_inds: [0, 0] 
-checkpoint: null 
+checkpoint: null
+
+#gamma: 0.99
+#gae_lambda: 0.95
+#clip_epsilon: 0.2
+#ent_coef: 0.0
+#vf_coef: 0.5
+#lr: 0.0003                 # Adam 学习率（actor/critic 共用）
+#ppo_epochs: 10             # 每个 batch 上的 PPO 轮数
+#minibatch_size: 64
+#frames_per_batch: 16     # 每次从采样器收集的步数（会被 SyncDataCollector 使用）
+#total_frames: 200000       # 训练总步数（collector 的 total_frames）
+#log_every: 10              # 训练日志打印频率（可选）
+#hidden_sizes: [128, 128]   # MLP 隐藏层
+#activation: tanh           # 仅注释说明：你的构建器里用 nn.Tanh
+#in_key: obs                # 你的 trainer 目前从 "obs" 读输入

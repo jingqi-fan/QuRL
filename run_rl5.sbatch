@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH -J qgym_gpu_rl_n_model
 #SBATCH -o slurm-%j.out
-#SBATCH --time=08:00:00
+#SBATCH --time=19:00:00
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=64G
@@ -13,12 +13,12 @@ set -x
 module purge
 
 # ===== Python 解释器（不激活环境，直接用前缀）=====
-PY=/scratch/jf5524/conda/pt-cu121/bin/python
+PY=/scratch/jf5524/conda/py310/bin/python
 which "$PY"
 "$PY" -V
 
 # （可选）部分站点需要设置这些
-export CONDA_PREFIX=/scratch/jf5524/conda/pt-cu121
+export CONDA_PREFIX=/scratch/jf5524/conda/py310
 export LD_LIBRARY_PATH="${CONDA_PREFIX}/lib:${LD_LIBRARY_PATH:-}"
 
 # ========= 路径 =========
@@ -69,20 +69,25 @@ run() {
 
 
 # ====== 串行跑多个实验（不需要 srun）======
-#run WC.yaml          n_model_10
-#run WC.yaml          n_model_50
-#run WC.yaml          n_model_100
-#run WC.yaml          n_model_200
+runs WC_multi_batch.yaml          n_model_mm_10
+runs WC_multi_batch.yaml          n_model_mm_50
+runs WC_multi_batch.yaml          n_model_mm_100
+runs WC_multi_batch.yaml          n_model_mm_200
+
+runs WC_multi_batch.yaml          en_model_mm_10
+runs WC_multi_batch.yaml          en_model_mm_50
+runs WC_multi_batch.yaml          en_model_mm_100
+runs WC_multi_batch.yaml          en_model_mm_200
 
 #run pathwise.yaml          n_model_10
 #run pathwise.yaml          n_model_50
 #run pathwise.yaml          n_model_100
 #run pathwise.yaml          n_model_200
 #
-run vanilla.yaml          n_model_mm_10
-run vanilla.yaml          n_model_mm_50
-run vanilla.yaml          n_model_mm_100
-run vanilla.yaml          n_model_mm_200
+#run vanilla.yaml          n_model_mm_10
+#run vanilla.yaml          n_model_mm_50
+#run vanilla.yaml          n_model_mm_100
+#run vanilla.yaml          n_model_mm_200
 
 #run vanilla_bc.yaml          n_model_10
 #run vanilla_bc.yaml          n_model_50

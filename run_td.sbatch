@@ -13,12 +13,12 @@ set -x
 module purge
 
 # ===== Python 解释器（不激活环境，直接用前缀）=====
-PY=/scratch/jf5524/conda/pt-cu121/bin/python
+PY=/scratch/jf5524/conda/py310/bin/python
 which "$PY"
 "$PY" -V
 
 # （可选）部分站点需要设置这些
-export CONDA_PREFIX=/scratch/jf5524/conda/pt-cu121
+export CONDA_PREFIX=/scratch/jf5524/conda/py310
 export LD_LIBRARY_PATH="${CONDA_PREFIX}/lib:${LD_LIBRARY_PATH:-}"
 
 # ========= 路径 =========

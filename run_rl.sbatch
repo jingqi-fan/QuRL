@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH -J qgym_gpu_rl_n_model
 #SBATCH -o slurm-%j.out
-#SBATCH --time=8:00:00
+#SBATCH --time=9:00:00
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=64G
@@ -95,31 +95,19 @@ runs() {
   info "END   $(date +'%F %T')  run: ${env_stub} ${tag}"
 }
 
-#run WC.yaml          en_model_mm_10
-#run WC.yaml          en_model_mm_50
-#run WC.yaml          en_model_mm_100
-#run WC.yaml          en_model_mm_200
-
-#run WC.yaml          reentrant_2f
-#run pathwise.yaml          reentrant_2f
-#run vanilla.yaml          reentrant_2f
-#run vanilla_bc.yaml          reentrant_2f
-
 # ====== 串行跑多个实验（不需要 srun）======
-#runs WC.yaml          n_model_mm_10
-#runs WC.yaml          n_model_mm_50
-#runs WC.yaml          n_model_mm_100
-#runs WC.yaml          n_model_mm_200
-#
-#runs WC.yaml          en_model_mm_10
-#runs WC.yaml          en_model_mm_50
-#runs WC.yaml          en_model_mm_100
-#runs WC.yaml          en_model_mm_200
-
-runs WC.yaml          n_model_mm_200
-runs WC2.yaml          n_model_mm_200
 runs WC.yaml          n_model_mm_10
-runs WC2.yaml          n_model_mm_10
+runs WC.yaml          n_model_mm_50
+runs WC.yaml          n_model_mm_100
+runs WC.yaml          n_model_mm_200
+
+runs WC.yaml          en_model_mm_10
+runs WC.yaml          en_model_mm_50
+runs WC.yaml          en_model_mm_100
+runs WC.yaml          en_model_mm_200
+
+#run WC.yaml          reentrant_2
+
 #runs pathwise.yaml          reentrant_2
 #runs pathwise.yaml          reentrant_2f
 #runs vanilla.yaml          reentrant_2
@@ -142,7 +130,7 @@ runs WC2.yaml          n_model_mm_10
 #run vanilla_bc.yaml          n_model_100
 #run vanilla_bc.yaml          n_model_200
 
-#run WC.yaml          reentrant_2
+
 #run pathwise.yaml          reentrant_2
 #run vanilla.yaml          reentrant_2
 #run vanilla_bc.yaml          reentrant_2
