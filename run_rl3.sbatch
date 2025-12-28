@@ -88,15 +88,10 @@ runs() {
 #run WC6.yaml          n_model_mm_200
 
 
-run vanilla_bc.yaml          n_model_mm_10
-run vanilla_bc.yaml          n_model_mm_50
-run vanilla_bc.yaml          n_model_mm_100
-run vanilla_bc.yaml          n_model_mm_200
-
-run vanilla_bc.yaml          en_model_mm_10
-run vanilla_bc.yaml          en_model_mm_50
-run vanilla_bc.yaml          en_model_mm_100
-run vanilla_bc.yaml          en_model_mm_200
+run_multi_env vanilla.yaml          n_model_10
+run_multi_env vanilla.yaml          n_model_50
+run_multi_env vanilla.yaml          n_model_100
+run_multi_env vanilla.yaml          n_model_200
 
 #runs vanilla_bc.yaml          reentrant_2
 #runs vanilla_bc.yaml          reentrant_2f

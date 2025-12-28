@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH -J qgym_gpu_rl_en_model
 #SBATCH -o slurm-%j.out
-#SBATCH --time=9:00:00
+#SBATCH --time=10:00:00
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=64G
@@ -81,7 +81,7 @@ run() {
   info "END   $(date +'%F %T')  run: ${env_stub} ${tag}"
 }
 
-run_multi() {
+run_multi_env() {
   local env_stub="$1"   # 例如: vanilla_bc.yaml
   local tag="$2"        # 例如: n_model_mm_200
   info "START $(date +'%F %T')  CWD=$(pwd)  run: ${env_stub} ${tag}"
@@ -118,7 +118,13 @@ runs() {
 
 #run pathwise.yaml     reentrant_2
 ##
-run_multi vanilla.yaml          reentrant_2
+run_multi_env vanilla_cpu.yaml          n_model_10
+run_multi_env vanilla_cpu.yaml          n_model_50
+run_multi_env vanilla_cpu.yaml          n_model_100
+run_multi_env vanilla_cpu.yaml          n_model_200
+
+# cpu + multi env  对应2
+
 #run vanilla.yaml          n_model_mm_10
 #run vanilla.yaml          n_model_mm_50
 #run vanilla.yaml          n_model_mm_100
