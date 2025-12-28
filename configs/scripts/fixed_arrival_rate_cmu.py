@@ -6,7 +6,7 @@ from utils.switchplot import *
 import yaml
 import argparse
 from utils.switchplot import *
-from main.trainer_multi_env import Trainer
+from main.trainer import Trainer
 
 import torch
 import torch.optim as optim
