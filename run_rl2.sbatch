@@ -118,10 +118,10 @@ runs() {
 
 #run pathwise.yaml     reentrant_2
 ##
-run_multi_env vanilla_cpu.yaml          n_model_10
-run_multi_env vanilla_cpu.yaml          n_model_50
-run_multi_env vanilla_cpu.yaml          n_model_100
-run_multi_env vanilla_cpu.yaml          n_model_200
+run_multi_env vanilla_cpu.yaml          n_model_mm_10
+run_multi_env vanilla_cpu.yaml          n_model_mm_50
+run_multi_env vanilla_cpu.yaml          n_model_mm_100
+run_multi_env vanilla_cpu.yaml          n_model_mm_200
 
 # cpu + multi env  对应2
 

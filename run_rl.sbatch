@@ -130,10 +130,10 @@ runs() {
 #run pathwise.yaml          n_model_100
 #run pathwise.yaml          n_model_200
 ##
-run_multi_env vanilla.yaml          n_model_10
-run_multi_env vanilla.yaml          n_model_50
-run_multi_env vanilla.yaml          n_model_100
-run_multi_env vanilla.yaml          n_model_200
+run_multi_env vanilla.yaml          n_model_mm_10
+run_multi_env vanilla.yaml          n_model_mm_50
+run_multi_env vanilla.yaml          n_model_mm_100
+run_multi_env vanilla.yaml          n_model_mm_200
 
 # gpu + multi env  对应 3号
 

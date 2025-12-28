@@ -45,7 +45,7 @@ squeue -u $USER
 查看某作业详情
 scontrol show job 1761408
 查看作业输出内容
-cat slurm-3777331.out
+cat slurm-3784475.out
 删掉当前用户的所有运行脚本！！！
 scancel -u $USER
 
