@@ -1,13 +1,11 @@
 #!/bin/bash
-#SBATCH -J qgym_gpu_td
+#SBATCH -J qgym_gpu
 #SBATCH -o slurm-%j.out
-#SBATCH -p cs
-#SBATCH --qos=normal
 #SBATCH --time=9:00:00
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=64G
-#SBATCH --chdir=/scratch/jf5524/QGymGPU
+#SBATCH --chdir=/scratch/jf5524/QGymGPU   # 保底：作业启动时的 CWD 就在项目根
 
 set -euo pipefail
 set -x
