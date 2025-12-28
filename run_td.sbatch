@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH -J qgym_gpu_td
 #SBATCH -o slurm-%j.out
-#SBATCH -p cpu
+#SBATCH -p cs
 #SBATCH --qos=normal
 #SBATCH --time=9:00:00
 #SBATCH --ntasks=1
