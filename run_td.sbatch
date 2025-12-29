@@ -77,9 +77,9 @@ run() {
 #run cmu         en_model_mm_100
 #run cmu         en_model_mm_200
 
-#run cmu          n_model_mm_10
-#run cmu          n_model_mm_50
-#run cmu          n_model_mm_100
+run cmu          n_model_mm_10
+run cmu          n_model_mm_50
+run cmu          n_model_mm_100
 run cmu          n_model_mm_200
 
 

@@ -5,7 +5,6 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=64G
-#SBATCH --gres=gpu:rtx8000:1
 #SBATCH --chdir=/scratch/jf5524/QGymGPU   # 保底：作业启动时的 CWD 就在项目根
 
 set -euo pipefail
@@ -87,15 +86,11 @@ runs() {
 #run WC.yaml          en_model_50
 #run WC.yaml          en_model_100
 #run WC.yaml          en_model_200
-run pathwise.yaml          n_model_mm_10
-run pathwise.yaml          n_model_mm_50
-run pathwise.yaml          n_model_mm_100
-run pathwise.yaml          n_model_mm_200
 
-run pathwise.yaml          en_model_mm_10
-run pathwise.yaml          en_model_mm_50
-run pathwise.yaml          en_model_mm_100
-run pathwise.yaml          en_model_mm_200
+run vanilla_cpu.yaml          n_model_mm_10
+run vanilla_cpu.yaml          n_model_mm_50
+run vanilla_cpu.yaml          n_model_mm_100
+run vanilla_cpu.yaml          n_model_mm_200
 
 #runs pathwise.yaml          reentrant_2
 #runs pathwise.yaml          reentrant_2f
