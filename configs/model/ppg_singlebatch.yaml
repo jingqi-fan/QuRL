@@ -15,9 +15,9 @@ param:
   width: 256
   f_time: False 
 opt:
-  num_epochs: 50
-  train_batch: 20
-  test_batch: 20
+  num_epochs: 20
+  train_batch: 50
+  test_batch: 50
 #  num_epochs: 1
 #  train_batch: 1
 #  test_batch: 1

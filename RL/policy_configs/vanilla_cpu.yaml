@@ -26,7 +26,7 @@ training:
   per_iter_normal_value: False
   actors: 50
   episode_steps: 256
-  num_epochs: 50
+  num_epochs: 20
   train_batch: 50
   test_batch: 50
 #  actors: 2
