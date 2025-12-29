@@ -14,10 +14,10 @@ plt.rcParams['ytick.labelsize'] = 19
 
 # 数据（负数表示 OOM，柱高取 abs(负数)）
 data = np.array([
-    [48.59, 47.53, 48.70, 48.78],
-    [411.77, 413.05, 416.31, 462.27],
-    [267.99, 422.23, 650.3, 1643.83],
-    [78.76, 170.04, 396.22, -100]   # OOM -> 灰柱高度 200
+    [570.67, 595.69, 610.02, 1322.51],
+    [-9000, -9000, -9000, -9000],
+    [-9000, -9000, -9000, -9000],
+    [570.67, 1193.48, 1864.06, 6005.81]   # OOM -> 灰柱高度 200
 ])
 
 x_labels = ['10', '50', '100', '200']
@@ -40,62 +40,7 @@ legend_labels = [
 
 plt.figure(figsize=(10, 6))
 
-# # bars = []
-# # 画柱子
-# for i in range(data.shape[0]):
-#     bar_group = []
-#     for j, value in enumerate(data[i]):
-#         is_oom = (value < 0)
-#         height = abs(value) if is_oom else value
-#
-#         color = oom_color if is_oom else colors[i]
-#         hatch = '//' if i == 0 and (not is_oom) else None
-#         edge_color = '#4d4d4d' if hatch else 'white'
-#         line_wi = 0 if i ==0 else 0.5
-#
-#         b = plt.bar(
-#             x[j] + i * width,
-#             height,
-#             width,
-#             color=color,
-#             edgecolor=edge_color,
-#             linewidth=0.5,
-#             hatch=hatch
-#         )
-#         bar_group.append(b[0])
-#     bars.append(bar_group)
-#
-# bars = []
-#
-# for i in range(data.shape[0]):
-#     if i == 0:
-#         # 有斜线的柱子
-#         b = plt.bar(
-#             x + i * width,
-#             data[i],
-#             width,
-#             color=colors[i],
-#             label=legend_labels[i],
-#             hatch='//',
-#             edgecolor='#4d4d4d',   # 斜线颜色
-#             linewidth=0.0         # 看起来像“无边框”
-#         )
-#     else:
-#         # 普通柱子
-#         b = plt.bar(
-#             x + i * width,
-#             data[i],
-#             width,
-#             color=colors[i],
-#             label=legend_labels[i],
-#             edgecolor='white',    # 白色边框
-#             linewidth=0.5
-#         )
-#
-#     bars.append(b)
-
 bars = []
-
 # 画柱子（支持：OOM 负值灰色 + i=0 斜线 + i=0 linewidth=0.0）
 for i in range(data.shape[0]):
     bar_group = []
@@ -189,6 +134,6 @@ plt.legend(handles=handles, loc='upper left')
 
 
 plt.tight_layout()
-plt.savefig('aba.png', dpi=300)
-plt.savefig('aba.pdf')
+plt.savefig('aba2.png')
+plt.savefig('aba2.pdf')
 plt.show()
