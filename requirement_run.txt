@@ -85,3 +85,6 @@ Submitted batch job 3872542
 (base) [jf5524@log-1 QGymGPU]$ sbatch run_rl4.sbatch
 Submitted batch job 3872543
 (base) [jf5524@log-1 QGymGPU]$
+
+(base) [jf5524@log-2 QGymGPU]$ sbatch run_td.sbatch
+Submitted batch job 3873750
