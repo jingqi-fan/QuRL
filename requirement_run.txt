@@ -33,7 +33,7 @@ scp -P 32077 -r root@123.37.6.118:/root/QGymGPU/results/rl/ ./rl_results
 ps -p 675763 -o pid,cmd
 scp -r jf5524@greene.hpc.nyu.edu:/scratch/jf5524/QGymGPU/results/ .
 scp -r jf5524@greene.hpc.nyu.edu:/scratch/jf5524/QGymGPU/main/ .
-scp -r jf5524@greene.hpc.nyu.edu:/scratch/jf5524/QGymGPU/results/rl/ .
+scp -r jf5524@greene.hpc.nyu.edu:/scratch/jf5524/QGymGPU/results/cla/ .
 
 1017_1258_pathwise.yaml_en_model_mm_200.yaml
 1017_1257_WC.yaml_en_model_mm_200.yaml
@@ -45,7 +45,7 @@ squeue -u $USER
 查看某作业详情
 scontrol show job 1761408
 查看作业输出内容
-cat slurm-3834272.out
+cat slurm-3872534.out
 删掉当前用户的所有运行脚本！！！
 scancel -u $USER
 查找最近两天内有的job，包括成功的和失败的
@@ -54,7 +54,9 @@ sacct -u $USER --starttime=$(date -d "2 days ago" +%Y-%m-%dT%H:%M:%S) --format=J
 
 删除当前文件夹下所有文件
 rm -rf ./*
-
+丢弃当前修改过的结果
+git reset --hard HEAD
+以远程拉取的为准
 git pull origin master
 
 
@@ -70,5 +72,16 @@ QGym:
 ssh jf5524@greene.hpc.nyu.edu
 
 
-sbatch run_rl8.sbatch
+sbatch run_rl4.sbatch
 
+(base) [jf5524@log-1 QGymGPU]$ sbatch run_td.sbatch
+Submitted batch job 3872534
+(base) [jf5524@log-1 QGymGPU]$ sbatch run_rl.sbatch
+Submitted batch job 3872535
+(base) [jf5524@log-1 QGymGPU]$ sbatch run_rl2.sbatch
+Submitted batch job 3872540
+(base) [jf5524@log-1 QGymGPU]$ sbatch run_rl3.sbatch
+Submitted batch job 3872542
+(base) [jf5524@log-1 QGymGPU]$ sbatch run_rl4.sbatch
+Submitted batch job 3872543
+(base) [jf5524@log-1 QGymGPU]$
