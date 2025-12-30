@@ -87,4 +87,4 @@ Submitted batch job 3872543
 (base) [jf5524@log-1 QGymGPU]$
 
 (base) [jf5524@log-2 QGymGPU]$ sbatch run_td.sbatch
-Submitted batch job 3873750
+Submitted batch job 3873758
