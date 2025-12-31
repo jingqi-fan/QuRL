@@ -5,8 +5,9 @@ from matplotlib.ticker import MaxNLocator
 
 # ==== 字体设置 ====
 plt.rcParams['text.usetex'] = False
-plt.rcParams['font.family'] = 'serif'
-plt.rcParams['mathtext.fontset'] = 'cm'
+plt.rcParams['font.family'] = 'sans-serif'
+plt.rcParams['font.sans-serif'] = ['DejaVu Sans']
+plt.rcParams['mathtext.fontset'] = 'dejavusans'
 plt.rcParams['axes.labelsize'] = 26
 plt.rcParams['legend.fontsize'] = 19
 plt.rcParams['xtick.labelsize'] = 19
@@ -14,10 +15,10 @@ plt.rcParams['ytick.labelsize'] = 19
 
 # 数据（负数表示 OOM，柱高取 abs(负数)）
 data = np.array([
-    [570.67, 595.69, 610.02, 1322.51],
-    [-9000, -9000, -9000, -9000],
-    [-9000, -9000, -9000, -9000],
-    [570.67, 1193.48, 1864.06, 6005.81]   # OOM -> 灰柱高度 200
+    [210.26, 211.38, 210.48, 498.46],
+    [7938.35, 8120.18, 7745.60, 7980.42],
+    [363.61, 509.96, 793.38, 2505.93],
+    [5866.62, 7031.59, 8299.34, 12145.95]   # OOM -> 灰柱高度 200
 ])
 
 x_labels = ['10', '50', '100', '200']
@@ -130,7 +131,7 @@ handles.append(
         label='out of memory'
     )
 )
-plt.legend(handles=handles, loc='upper left')
+# plt.legend(handles=handles, loc='upper left')
 
 
 plt.tight_layout()
