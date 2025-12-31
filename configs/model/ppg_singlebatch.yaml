@@ -1,6 +1,6 @@
 name: 'ppg'
 env:
-  device: 'cpu'
+  device: 'cuda'
   env_temp: 1
   straight_through_min: True
   model_seed: 100

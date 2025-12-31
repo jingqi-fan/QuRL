@@ -33,7 +33,7 @@ scp -P 32077 -r root@123.37.6.118:/root/QGymGPU/results/rl/ ./rl_results
 ps -p 675763 -o pid,cmd
 scp -r jf5524@greene.hpc.nyu.edu:/scratch/jf5524/QGymGPU/results/ .
 scp -r jf5524@greene.hpc.nyu.edu:/scratch/jf5524/QGymGPU/main/ .
-scp -r jf5524@greene.hpc.nyu.edu:/scratch/jf5524/QGymGPU/results/cla/ .
+scp -r jf5524@greene.hpc.nyu.edu:/scratch/jf5524/QGymGPU/results/rl/ .
 
 1017_1258_pathwise.yaml_en_model_mm_200.yaml
 1017_1257_WC.yaml_en_model_mm_200.yaml
@@ -45,7 +45,7 @@ squeue -u $USER
 查看某作业详情
 scontrol show job 1761408
 查看作业输出内容
-cat slurm-3872534.out
+cat slurm-3872535.out
 删掉当前用户的所有运行脚本！！！
 scancel -u $USER
 查找最近两天内有的job，包括成功的和失败的
@@ -87,4 +87,4 @@ Submitted batch job 3872543
 (base) [jf5524@log-1 QGymGPU]$
 
 (base) [jf5524@log-2 QGymGPU]$ sbatch run_td.sbatch
-Submitted batch job 3873758
+Submitted batch job 3874661
