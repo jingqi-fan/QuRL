@@ -5,12 +5,17 @@ from matplotlib.ticker import MaxNLocator
 
 # ==== 字体设置 ====
 plt.rcParams['text.usetex'] = False
-plt.rcParams['font.family'] = 'serif'
-plt.rcParams['mathtext.fontset'] = 'cm'
+plt.rcParams['font.family'] = 'sans-serif'
+plt.rcParams['font.sans-serif'] = ['DejaVu Sans']
+plt.rcParams['mathtext.fontset'] = 'dejavusans'
 plt.rcParams['axes.labelsize'] = 26
 plt.rcParams['legend.fontsize'] = 19
 plt.rcParams['xtick.labelsize'] = 19
 plt.rcParams['ytick.labelsize'] = 19
+
+# 防止生成 type3 字体
+plt.rcParams['pdf.fonttype'] = 42   # TrueType
+plt.rcParams['ps.fonttype']  = 42
 
 # 数据（负数表示 OOM，柱高取 abs(负数)）
 data = np.array([
@@ -29,7 +34,7 @@ width = 0.18
 #66b221
 #74ca26
 colors = ['#74ca26', '#bae99b', '#e4ffd8', '#f4d9d9']
-oom_color = '#bdbdbd'
+oom_color = '#f4d9d9'
 
 legend_labels = [
     'GPU + multi-batched',
@@ -39,60 +44,6 @@ legend_labels = [
 ]
 
 plt.figure(figsize=(10, 6))
-
-# # bars = []
-# # 画柱子
-# for i in range(data.shape[0]):
-#     bar_group = []
-#     for j, value in enumerate(data[i]):
-#         is_oom = (value < 0)
-#         height = abs(value) if is_oom else value
-#
-#         color = oom_color if is_oom else colors[i]
-#         hatch = '//' if i == 0 and (not is_oom) else None
-#         edge_color = '#4d4d4d' if hatch else 'white'
-#         line_wi = 0 if i ==0 else 0.5
-#
-#         b = plt.bar(
-#             x[j] + i * width,
-#             height,
-#             width,
-#             color=color,
-#             edgecolor=edge_color,
-#             linewidth=0.5,
-#             hatch=hatch
-#         )
-#         bar_group.append(b[0])
-#     bars.append(bar_group)
-#
-# bars = []
-#
-# for i in range(data.shape[0]):
-#     if i == 0:
-#         # 有斜线的柱子
-#         b = plt.bar(
-#             x + i * width,
-#             data[i],
-#             width,
-#             color=colors[i],
-#             label=legend_labels[i],
-#             hatch='//',
-#             edgecolor='#4d4d4d',   # 斜线颜色
-#             linewidth=0.0         # 看起来像“无边框”
-#         )
-#     else:
-#         # 普通柱子
-#         b = plt.bar(
-#             x + i * width,
-#             data[i],
-#             width,
-#             color=colors[i],
-#             label=legend_labels[i],
-#             edgecolor='white',    # 白色边框
-#             linewidth=0.5
-#         )
-#
-#     bars.append(b)
 
 bars = []
 
@@ -136,19 +87,32 @@ for i in range(data.shape[0]):
 
 
 # 标数值（跳过 OOM：原始值 < 0）
+# ==== 标数值 / OOM ====
 for i in range(data.shape[0]):
     for j, rect in enumerate(bars[i]):
-        if data[i, j] < 0:
-            continue
         height = rect.get_height()
-        plt.text(
-            rect.get_x() + rect.get_width() / 2,
-            height,
-            f'{height:.1f}',
-            ha='center',
-            va='bottom',
-            fontsize=9
-        )
+
+        if data[i, j] < 0:
+            # OOM：在柱子顶端标注 OOM
+            plt.text(
+                rect.get_x() + rect.get_width() / 2,
+                height,
+                'OOM',
+                ha='center',
+                va='bottom',
+                fontsize=10,
+            )
+        else:
+            # 正常：标数值
+            plt.text(
+                rect.get_x() + rect.get_width() / 2,
+                height,
+                f'{height:.1f}',
+                ha='center',
+                va='bottom',
+                fontsize=10
+            )
+
 
 plt.xticks(x + width * 1.5, x_labels)
 ax = plt.gca()
@@ -185,10 +149,10 @@ handles.append(
         label='out of memory'
     )
 )
-plt.legend(handles=handles, loc='upper left')
+# plt.legend(handles=handles, loc='upper left')
 
 
 plt.tight_layout()
-plt.savefig('aba.png', dpi=300)
+plt.savefig('aba.png')
 plt.savefig('aba.pdf')
 plt.show()

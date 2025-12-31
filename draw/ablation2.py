@@ -13,6 +13,10 @@ plt.rcParams['legend.fontsize'] = 19
 plt.rcParams['xtick.labelsize'] = 19
 plt.rcParams['ytick.labelsize'] = 19
 
+# 防止生成 type3 字体
+plt.rcParams['pdf.fonttype'] = 42   # TrueType
+plt.rcParams['ps.fonttype']  = 42
+
 # 数据（负数表示 OOM，柱高取 abs(负数)）
 data = np.array([
     [210.26, 211.38, 210.48, 498.46],
@@ -93,7 +97,7 @@ for i in range(data.shape[0]):
             f'{height:.1f}',
             ha='center',
             va='bottom',
-            fontsize=9
+            fontsize=10
         )
 
 plt.xticks(x + width * 1.5, x_labels)

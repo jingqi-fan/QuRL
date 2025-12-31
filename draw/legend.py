@@ -8,6 +8,10 @@ plt.rcParams['font.sans-serif'] = ['DejaVu Sans']
 plt.rcParams['mathtext.fontset'] = 'dejavusans'
 plt.rcParams['legend.fontsize'] = 19
 
+# 防止生成 type3 字体
+plt.rcParams['pdf.fonttype'] = 42   # TrueType
+plt.rcParams['ps.fonttype']  = 42
+
 # ==== 颜色定义 ====
 colors = ['#74ca26', '#bae99b', '#e4ffd8', '#f4d9d9']
 oom_color = '#bdbdbd'
@@ -44,15 +48,15 @@ for i in range(1, 4):
         )
     )
 
-# OOM
-handles.append(
-    Patch(
-        facecolor=oom_color,
-        edgecolor='white',
-        linewidth=0.5,
-        label='out of memory'
-    )
-)
+# # OOM
+# handles.append(
+#     Patch(
+#         facecolor=oom_color,
+#         edgecolor='white',
+#         linewidth=0.5,
+#         label='out of memory'
+#     )
+# )
 
 # ==== legend-only 图 ====
 fig = plt.figure(figsize=(10, 1.35))
