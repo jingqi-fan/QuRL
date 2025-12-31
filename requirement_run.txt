@@ -45,7 +45,7 @@ squeue -u $USER
 查看某作业详情
 scontrol show job 1761408
 查看作业输出内容
-cat slurm-3900881.out
+cat slurm-3919576.out
 删掉当前用户的所有运行脚本！！！
 scancel -u $USER
 查找最近两天内有的job，包括成功的和失败的
@@ -74,17 +74,6 @@ ssh jf5524@greene.hpc.nyu.edu
 
 sbatch run_rl4.sbatch
 
+260101跑的100%reentrant的
 (base) [jf5524@log-1 QGymGPU]$ sbatch run_td.sbatch
-Submitted batch job 3872534
-(base) [jf5524@log-1 QGymGPU]$ sbatch run_rl.sbatch
-Submitted batch job 3872535
-(base) [jf5524@log-1 QGymGPU]$ sbatch run_rl2.sbatch
-Submitted batch job 3872540
-(base) [jf5524@log-1 QGymGPU]$ sbatch run_rl3.sbatch
-Submitted batch job 3872542
-(base) [jf5524@log-1 QGymGPU]$ sbatch run_rl4.sbatch
-Submitted batch job 3872543
-(base) [jf5524@log-1 QGymGPU]$
-
-(base) [jf5524@log-2 QGymGPU]$ sbatch run_td.sbatch
-Submitted batch job 3874661
+Submitted batch job 3919576
