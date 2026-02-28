@@ -33,9 +33,14 @@ width = 0.18
 #7fce37
 #66b221
 #74ca26
-colors = ['#74ca26', '#bae99b', '#e4ffd8', '#f4d9d9']
-oom_color = '#bdbdbd'
+# colors = ['#e47d6b', '#e9d264', '#8ED1C6', '#6B8EC1']
+# oom_color = '#6B8EC1'
 
+colors = ['#eb9184', '#fcf2ca', '#afe4dd', '#e2f6f3']
+oom_color = '#e2f6f3'
+# colors = ['#eb9184', '#fcf2ca', '#afe4dd', '#9ebbf1']
+# oom_color = '#9ebbf1'
+#e2f6f3
 legend_labels = [
     'GPU + multi-batched',
     'GPU + multi-env',
@@ -86,6 +91,7 @@ for i in range(data.shape[0]):
 
 
 # 标数值（跳过 OOM：原始值 < 0）
+# 标数值（跳过 OOM：原始值 < 0）
 for i in range(data.shape[0]):
     for j, rect in enumerate(bars[i]):
         if data[i, j] < 0:
@@ -97,14 +103,16 @@ for i in range(data.shape[0]):
             f'{height:.1f}',
             ha='center',
             va='bottom',
-            fontsize=10
+            fontsize=10,
+            fontweight='bold' if i == 0 else 'normal'   # 仅 GPU + multi-batched 加粗
         )
+
 
 plt.xticks(x + width * 1.5, x_labels)
 ax = plt.gca()
 ax.yaxis.set_major_locator(MaxNLocator(nbins=5))
 plt.xlabel('queues & servers')
-plt.ylabel('Running Time')
+plt.ylabel('Running Time (s)')
 
 # legend（加入 OOM）
 handles = []

@@ -9,6 +9,7 @@ import numpy as np
 import yaml
 import torch
 
+from RL.PPO.trainer_a2c import A2CTrainerTorchRL_Vanilla
 from RL.PPO.trainer_pathwise import PathwiseTrainerTorchRL, PathwiseArgs
 # from RL.PPO.trainer_wc import PPOTrainerTorchRL, PPOArgs
 from RL.PPO.trainer_vanilla import PPOTrainerTorchRL_Vanilla
@@ -176,6 +177,8 @@ def train_ppo():
             network_mask=network if network.dim() == 2 else network[0],  # [S,Q] or按需处理
             ct=ct
         )
+    elif policy_file_name == 'a2c.yaml' or policy_file_name == 'a2c':
+        trainer = A2CTrainerTorchRL_Vanilla(train_env=train_env, eval_env=eval_env, args=ppo_args, ct=ct)
     else:
         # # 运行 vanilla 和 vanilla bc 的
         trainer = PPOTrainerTorchRL_Vanilla(

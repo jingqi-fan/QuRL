@@ -13,8 +13,13 @@ plt.rcParams['pdf.fonttype'] = 42   # TrueType
 plt.rcParams['ps.fonttype']  = 42
 
 # ==== 颜色定义 ====
-colors = ['#74ca26', '#bae99b', '#e4ffd8', '#f4d9d9']
-oom_color = '#bdbdbd'
+# colors = ['#e47d6b', '#e9d264', '#8ED1C6', '#6B8EC1']
+# oom_color = '#6B8EC1'
+
+colors = ['#eb9184', '#fcf2ca', '#afe4dd', '#e2f6f3']
+oom_color = '#e2f6f3'
+# colors = ['#eb9184', '#fcf2ca', '#afe4dd', '#9ebbf1']
+# oom_color = '#9ebbf1'
 
 legend_labels = [
     'GPU + multi-batched',
@@ -74,6 +79,10 @@ legend = fig.legend(
     handletextpad=0.6,     # ⭐ 图例与文字距离
     fontsize=19
 )
+
+# === 仅 GPU + multi-batched 用黑体 ===
+legend_texts = legend.get_texts()
+legend_texts[0].set_fontweight('bold')
 
 # === 去掉边框 ===
 frame = legend.get_frame()

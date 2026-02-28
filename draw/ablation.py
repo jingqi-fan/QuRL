@@ -22,7 +22,7 @@ data = np.array([
     [48.59, 47.53, 48.70, 48.78],
     [411.77, 413.05, 416.31, 462.27],
     [267.99, 422.23, 650.3, 1643.83],
-    [78.76, 170.04, 396.22, -100]   # OOM -> 灰柱高度 200
+    [78.76, 170.04, 396.22, -400]   # OOM -> 灰柱高度 200
 ])
 
 x_labels = ['10', '50', '100', '200']
@@ -33,9 +33,13 @@ width = 0.18
 #7fce37
 #66b221
 #74ca26
-colors = ['#74ca26', '#bae99b', '#e4ffd8', '#f4d9d9']
-oom_color = '#f4d9d9'
+# colors = ['#e47d6b', '#e9d264', '#8ED1C6', '#6B8EC1']
+# oom_color = '#6B8EC1'
 
+colors = ['#eb9184', '#fcf2ca', '#afe4dd', '#e2f6f3']
+oom_color = '#e2f6f3'
+#e2f6f3
+#e3f3f1
 legend_labels = [
     'GPU + multi-batched',
     'GPU + multi-env',
@@ -103,14 +107,15 @@ for i in range(data.shape[0]):
                 fontsize=10,
             )
         else:
-            # 正常：标数值
+            # GPU + multi-batched（i == 0）用黑体
             plt.text(
                 rect.get_x() + rect.get_width() / 2,
                 height,
                 f'{height:.1f}',
                 ha='center',
                 va='bottom',
-                fontsize=10
+                fontsize=10,
+                fontweight='bold' if i == 0 else 'normal'
             )
 
 
@@ -118,7 +123,7 @@ plt.xticks(x + width * 1.5, x_labels)
 ax = plt.gca()
 ax.yaxis.set_major_locator(MaxNLocator(nbins=5))
 plt.xlabel('queues & servers')
-plt.ylabel('Running Time')
+plt.ylabel('Running Time (s)')
 
 # legend（加入 OOM）
 handles = []

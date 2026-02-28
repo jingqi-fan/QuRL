@@ -6,14 +6,14 @@ env:
   model_seed: 100
   test_seed: 42
   train_seed: 3003
-  randomize: True 
-  time_f: False 
+  randomize: True
+  time_f: False
   reward_scale: 1.0
 #  batch: 3
-model: 
+model:
   policy_name: "vanilla"
   scale: 10
-training:   
+training:
   behavior_cloning: False
   normalize_advantage: True
   normalize_value: True
