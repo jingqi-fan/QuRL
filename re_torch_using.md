@@ -8,7 +8,7 @@ cd QGymGPU
 ## 运行代码
 export PYTHONPATH=/root/QGymGPU
 git pull origin master
-nohup python RL/PPO/train.py a2c.yaml reentrant_2 > /dev/null 2>&1 &
+nohup python RL/PPO/train.py a2c.yaml reentrant_4 > /dev/null 2>&1 &
 python RL/PPO/train.py a2c.yaml n_model_mm_10
 
 ## 下载到本地当前目录
