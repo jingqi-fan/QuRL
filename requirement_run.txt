@@ -70,10 +70,6 @@ QGym:
 
 
 ssh jf5524@greene.hpc.nyu.edu
-
+ssh jf5524@login.torch.hpc.nyu.edu
 
 sbatch run_rl4.sbatch
-
-260101跑的100%reentrant的
-(base) [jf5524@log-1 QGymGPU]$ sbatch run_td.sbatch
-Submitted batch job 3919576
