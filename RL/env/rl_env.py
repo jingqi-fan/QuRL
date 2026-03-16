@@ -5,6 +5,7 @@ from torchrl.data import Composite, Bounded, Unbounded
 
 from main.env import BatchedDiffDES
 
+
 class RLViewDiffDES(BatchedDiffDES):
     def __init__(self, *args, time_f: bool = True, **kwargs):
         self.time_f = time_f
@@ -55,23 +56,22 @@ class RLViewDiffDES(BatchedDiffDES):
         return self._filter_obs(td)
 
 
-
 def dummy_draw_service(env, t):
-
     B = t.shape[0]
     return torch.ones(B, env.Q, device=env.device)
 
-def dummy_draw_inter_arrivals(env, t):
 
+def dummy_draw_inter_arrivals(env, t):
     B = t.shape[0]
     return torch.ones(B, env.Q, device=env.device) * 2.0
 
+
 if __name__ == "__main__":
-    # 配置环境
-    S, Q = 2, 3  # 2 个服务器，3 个队列
+    # Configure environment
+    S, Q = 2, 3  # 2 servers, 3 queues
     network = torch.ones(S, Q)  # fully connected
-    mu = torch.ones(S, Q)       # unit service rate
-    h = torch.arange(1, Q+1).float()  # [1,2,3] as weights
+    mu = torch.ones(S, Q)  # unit service rate
+    h = torch.arange(1, Q + 1).float()  # [1,2,3] as weights
 
     env = RLViewDiffDES(
         network=network,
@@ -82,8 +82,8 @@ if __name__ == "__main__":
         max_jobs=4,
         temp=1.0,
         device="cuda",
-        default_B=5,   # batch = 2
-        time_f=False,   #  开关控制是否在 obs 里包含 time
+        default_B=5,  # batch = 2
+        time_f=False,  # Switch to control whether time is included in obs
     )
 
     # reset
@@ -91,7 +91,7 @@ if __name__ == "__main__":
     print("=== Reset obs ===")
     print(td)
 
-    # 随机动作 step
+    # Random action step
     for i in range(5):
         B = td.batch_size[0]
         action = torch.rand(B, S, Q)
