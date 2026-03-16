@@ -17,7 +17,7 @@ from RL.utils.count_time import count_time
 from RL.algorithms.trainer_wc2 import PPOTrainerTorchRL, PPOArgs
 
 def load_rl_env(seed, batch):
-    # ---- 抽样器（回到 torch 张量） ----
+    # ---- Sampler (back to torch tensors) ----
     # def draw_service(env, t: torch.Tensor) -> torch.Tensor:
     #     B = t.shape[0]
     #     rate = torch.ones(B, orig_q, device=env.device)
@@ -25,7 +25,7 @@ def load_rl_env(seed, batch):
 
     def draw_service(env, t: torch.Tensor) -> torch.Tensor:
         B = t.shape[0]
-        rate = torch.full((B, orig_q), 1.0, device=env.device)  # rate = 0.5 → 更大数值
+        rate = torch.full((B, orig_q), 1.0, device=env.device)  # rate = 0.5 -> larger value
         return torch.distributions.Exponential(rate=rate).sample()
 
     def draw_inter_arrivals(env, t: torch.Tensor) -> torch.Tensor:
@@ -67,7 +67,7 @@ def train_ppo():
     train_env, train_act_spec, train_obs_dim = load_rl_env(train_seed, train_batch)
     eval_env, eval_act_spec, eval_obs_dim = load_rl_env(test_seed, test_batch)
 
-    # 2) 组装 Trainer 的参数
+    # 2) Assemble Trainer arguments
     ppo_args = PPOArgs(
         device=device,
         obs_dim=int(train_obs_dim),
@@ -99,7 +99,7 @@ def train_ppo():
         behavior_cloning=bool(bc),
         bc_samples=1000,
         bc_lr=3e-4,
-        # 评估
+        # evaluation
         eval_every=1,
         eval_T=int(test_T),
         randomize=randomize,
@@ -119,19 +119,19 @@ def train_ppo():
         # algorithms
         gamma=float(gamma),
         max_grad_norm=1.0,
-        # LR（分别对 policy / value）
+        # LR (separately for policy / value)
         lr_policy=float(lr_policy),
         lr_value=float(lr_value),
         min_lr_policy=float(min_lr_policy),
         min_lr_value=float(min_lr_value),
         warmup=0.03,
-        # 训练轮次
+        # training epochs
         total_epochs=int(num_epochs),
         rescale_value=bool(rescale_v),
         behavior_cloning=bool(bc),
         bc_samples=1000,
         bc_lr=3e-4,
-        # 评估
+        # evaluation
         eval_every=1,
         eval_T=int(test_T),
         randomize=randomize,
@@ -196,7 +196,7 @@ if __name__ == "__main__":
     else:
         env_type = env_name
 
-    # 从 env 中读取
+    # Read from env
     if env_config["network"] is None:
         network_path = os.path.join(
             project_root, "configs", "env_data", env_type, f"{env_type}_network.npy"
@@ -310,14 +310,14 @@ if __name__ == "__main__":
     eval_freq = episode_steps
     test_T = env_config['test_T']
 
-    # ===== 输出重定向到 results/rl/ =====
+    # ===== Redirect output to results/rl/ =====
     timestamp = time.strftime("%m%d_%H%M")
     results_dir = os.path.join(project_root, "results", "rl")
     os.makedirs(results_dir, exist_ok=True)
 
     log_file = os.path.join(results_dir, f"{timestamp}_{policy_file_name}_{env_file_name}_lrpolicy_{lr_policy}.log")
     sys.stdout = open(log_file, "w", buffering=1, encoding="utf-8")
-    sys.stderr = sys.stdout  # 错误也写入同一个文件
+    sys.stderr = sys.stdout  # Errors are also written to the same file
 
     print(f"[INFO] Logging to {log_file}")
 
@@ -328,4 +328,3 @@ if __name__ == "__main__":
 
 
     train_ppo()
-

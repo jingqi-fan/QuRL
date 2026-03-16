@@ -7,24 +7,19 @@ import numpy as np
 import yaml
 import torch
 
-from RL.algorithms_multi_env.trainer_pathwise import PathwiseTrainerTorchRL, PathwiseArgs
-# from RL.algorithms_multi_env.trainer_wc import PPOTrainerTorchRL, PPOArgs
-from RL.algorithms_multi_env.trainer_vanilla import PPOTrainerTorchRL_Vanilla
+from RL.algorithms.trainer_pathwise import PathwiseTrainerTorchRL, PathwiseArgs
+# from RL.algorithms.trainer_wc import PPOTrainerTorchRL, PPOArgs
+from RL.algorithms.trainer_vanilla import PPOTrainerTorchRL_Vanilla
 from RL.env.rl_env import RLViewDiffDES
 from RL.utils.count_time import count_time
 
-from RL.algorithms_multi_env.trainer_wc2 import PPOTrainerTorchRL, PPOArgs
+from RL.algorithms.trainer_wc2 import PPOTrainerTorchRL, PPOArgs
 
 def load_rl_env(seed, batch):
-    # ---- 抽样器（回到 torch 张量） ----
-    # def draw_service(env, t: torch.Tensor) -> torch.Tensor:
-    #     B = t.shape[0]
-    #     rate = torch.ones(B, orig_q, device=env.device)
-    #     return torch.distributions.Exponential(rate=rate).sample()
 
     def draw_service(env, t: torch.Tensor) -> torch.Tensor:
         B = t.shape[0]
-        rate = torch.full((B, orig_q), 1.0, device=env.device)  # rate = 0.5 → 更大数值
+        rate = torch.full((B, orig_q), 1.0, device=env.device)
         return torch.distributions.Exponential(rate=rate).sample()
 
     def draw_inter_arrivals(env, t: torch.Tensor) -> torch.Tensor:
@@ -35,20 +30,6 @@ def load_rl_env(seed, batch):
         lam_t = torch.as_tensor(lam_vec, device=env.device).view(1, orig_q).expand(t.size(0), orig_q)
         return torch.distributions.Exponential(rate=lam_t).sample()
 
-    # ---- 构造环境 ----
-    # env = RLViewDiffDES(
-    #     network=network,
-    #     mu=mu,
-    #     h=h,
-    #     draw_service=draw_service,
-    #     draw_inter_arrivals=draw_inter_arrivals,
-    #     temp=env_temp,
-    #     device=device,
-    #     seed=seed,
-    #     default_B=batch,
-    #     queue_event_options=queue_event_options,
-    #     time_f=time_f,
-    # ).to(device)
     env = (RLViewDiffDES(
         network=network,
         mu=mu,
@@ -76,7 +57,7 @@ def load_rl_env(seed, batch):
 
 
 def train_ppo():
-    # ---- multi-env: 外部创建 N 个 env，每个 env 内 batch=1（不多进程） ----
+    # ---- multi-env: 外部创建 N 个 env，每个 env 内 batch=1 ----
     train_envs = []
     for i in range(int(train_batch)):
         env_i, train_act_spec, train_obs_dim = load_rl_env(train_seed + i, batch=1)
@@ -87,7 +68,6 @@ def train_ppo():
         env_i, eval_act_spec, eval_obs_dim = load_rl_env(test_seed + i, batch=1)
         eval_envs.append(env_i)
 
-    # 后面 args 不用改：train_batch/test_batch 仍表示“并行条数”
     ppo_args = PPOArgs(
         device=device,
         obs_dim=int(train_obs_dim),
@@ -125,7 +105,6 @@ def train_ppo():
 
     ct = count_time(time.time())
 
-    # vanilla trainer：把 env list 传进去
     trainer = PPOTrainerTorchRL_Vanilla(
         train_env=train_envs,
         eval_env=eval_envs,
@@ -140,7 +119,7 @@ def train_ppo():
 
 
 if __name__ == "__main__":
-    project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # 输出为 QuRL 项目目录
+    project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     policy_file_name = sys.argv[1]
     env_file_name = sys.argv[2]
     print(f'Policy file: {policy_file_name}, Env file: {env_file_name}')
