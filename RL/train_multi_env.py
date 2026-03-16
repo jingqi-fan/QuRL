@@ -15,8 +15,8 @@ from RL.utils.count_time import count_time
 
 from RL.algorithms.trainer_wc2 import PPOTrainerTorchRL, PPOArgs
 
-def load_rl_env(seed, batch):
 
+def load_rl_env(seed, batch):
     def draw_service(env, t: torch.Tensor) -> torch.Tensor:
         B = t.shape[0]
         rate = torch.full((B, orig_q), 1.0, device=env.device)
@@ -57,7 +57,7 @@ def load_rl_env(seed, batch):
 
 
 def train_ppo():
-    # ---- multi-env: 外部创建 N 个 env，每个 env 内 batch=1 ----
+    # ---- multi-env: Create N envs externally, each env with batch=1 ----
     train_envs = []
     for i in range(int(train_batch)):
         env_i, train_act_spec, train_obs_dim = load_rl_env(train_seed + i, batch=1)
@@ -75,8 +75,8 @@ def train_ppo():
         Q=int(orig_q),
         hidden=int(scale * int(np.sqrt(orig_q * orig_s))),
         episode_steps=int(episode_steps),
-        train_batch=int(train_batch),   # 现在表示 env 数量
-        test_batch=int(test_batch),     # 现在表示 env 数量
+        train_batch=int(train_batch),  # Now represents the number of envs
+        test_batch=int(test_batch),  # Now represents the number of envs
         gamma=float(gamma),
         gae_lambda=float(gae_lambda),
         clip_eps=0.2,
@@ -117,7 +117,6 @@ def train_ppo():
     trainer.learn()
 
 
-
 if __name__ == "__main__":
     project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     policy_file_name = sys.argv[1]
@@ -143,7 +142,7 @@ if __name__ == "__main__":
     else:
         env_type = env_name
 
-    # 从 env 中读取
+    # Read from env
     if env_config["network"] is None:
         network_path = os.path.join(
             project_root, "configs", "env_data", env_type, f"{env_type}_network.npy"
@@ -186,7 +185,6 @@ if __name__ == "__main__":
         else:
             queue_event_options2 = torch.tensor(queue_event_options2)
 
-
     if lam_params["val"] is None:
         lam_r_path = os.path.join(
             project_root, "configs", "env_data", env_type, f"{env_type}_lam.npy"
@@ -207,6 +205,7 @@ if __name__ == "__main__":
         else:
             return "Nonvalid arrival rate"
         return lam
+
 
     # env hyperparameters
     device = policy_config['env']['device']
@@ -234,7 +233,7 @@ if __name__ == "__main__":
     # lr = policy_config['training']['lr']
     lr_policy = policy_config['training']['lr_policy']
     lr_value = policy_config['training']['lr_value']
-    min_lr_policy =policy_config['training']['min_lr_policy']
+    min_lr_policy = policy_config['training']['min_lr_policy']
     min_lr_value = policy_config['training']['min_lr_value']
     train_seed = policy_config['env']['train_seed']
     test_seed = policy_config['env']['test_seed']
@@ -261,22 +260,19 @@ if __name__ == "__main__":
     eval_freq = episode_steps
     test_T = env_config['test_T']
 
-    # ===== 新增：输出重定向到 results/rl/ =====
+    # ===== Added: Redirect output to results/rl/ =====
     timestamp = time.strftime("%m%d_%H%M")
     results_dir = os.path.join(project_root, "results", "rl")
     os.makedirs(results_dir, exist_ok=True)
 
     log_file = os.path.join(results_dir, f"{timestamp}_{policy_file_name}_{env_file_name}_lrpolicy_{lr_policy}.log")
     sys.stdout = open(log_file, "w", buffering=1, encoding="utf-8")
-    sys.stderr = sys.stdout  # 错误也写入同一个文件
+    sys.stderr = sys.stdout  # Errors are also written to the same file
 
     print(f"[INFO] Logging to {log_file}")
-
 
     print("\n========== Policy Config ==========")
     pprint(policy_config)
     print("===================================")
 
-
     train_ppo()
-
