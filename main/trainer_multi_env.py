@@ -7,10 +7,7 @@ import math
 from tensordict import TensorDict
 from datetime import datetime
 
-# 你自己的工具（保持不变）
 from utils.switchplot import create_plot_dir, create_loss_dir
-# 如果你用到了 rt.*（pad_pool / Sinkhorn / linear_assignment_batch），请确保导入：
-# import your_runtime_lib as rt
 
 from main.env import BatchedDiffDES
 # from main.env_s import BatchedDiffDES
@@ -68,20 +65,17 @@ class Trainer:
         # 把环境相关张量准备好（替代 dq.xxx）
         network = self.env_config["network"].to(self.device)  # [S,Q]
         mu = self.env_config["mu"].to(self.device)  # [S,Q]
-        h = torch.tensor(self.env_config["h"], device=self.device).float()  # [S,Q] 或可广播形状
+        h = torch.tensor(self.env_config["h"], device=self.device).float()  # [S,Q]
         S, Q = network.shape
 
         # 创建多个 env，每个 env reset 的 batch_size 都是 [1]
         envs = self._make_envs(B_train, self.model_config["env"]["train_seed"])
         td_list = [env.reset(env.gen_params(batch_size=[1])) for env in envs]
 
-        # stack 成一个 batched TensorDict：batch_size=[B_train]
-        # 注意：如果你 tensordict 版本不支持 torch.stack，可改成 TensorDict.stack(td_list, dim=0)
         td = torch.stack(td_list, dim=0)
 
         self.optimizer.zero_grad()
 
-        # 可选：记录梯度（保持你原本的 hooks）
         back_outs = []
 
         def action_hook(grad):
@@ -109,7 +103,6 @@ class Trainer:
             )
             pr.register_hook(priority_hook)
 
-            # 如果训练阶段有“server pools”，你原代码 repeat_interleave(1, dim=1) 实际无影响，这里保留
             pr = pr.repeat_interleave(1, dim=1)
 
             # ---- 策略分支（按需保留/修改） ----
@@ -144,7 +137,6 @@ class Trainer:
             action = pr
             action.register_hook(action_hook)
 
-            # 关键：不多进程。逐 env step，但 action 是 batched 一次算好的
             out_list = []
             for i, env in enumerate(envs):
                 action_i = action[i: i + 1]  # [1,S,Q]
@@ -153,8 +145,7 @@ class Trainer:
                 )
                 out_list.append(out_i)
 
-            # stack 回 batched TensorDict
-            out = torch.stack(out_list, dim=0)  # batch_size=[B_train]
+            out = torch.stack(out_list, dim=0)
 
             # 统计
             total_cost += out["cost"]  # [B,1]
@@ -163,7 +154,6 @@ class Trainer:
             # 下一步
             td = out.select("queues", "time", "params")
 
-        # 反传 + 优化
         loss = torch.mean(total_cost / self.env_config["train_T"])
         loss.backward()
 
@@ -237,7 +227,6 @@ class Trainer:
                 raise RuntimeError(f"tensor cannot be normalized to [B,1], got {tuple(x.shape)}")
             return x
 
-        # 多 env（不多进程），每个 env 内 batch=1
         envs = self._make_envs(B_test, self.model_config["env"]["test_seed"])
         td_list = [env.reset(env.gen_params(batch_size=[1])) for env in envs]
 
@@ -266,7 +255,7 @@ class Trainer:
                 repeated_network = network.unsqueeze(0).expand(B_test, -1, -1)  # [B,S,Q]
                 repeated_mu = mu.unsqueeze(0).expand(B_test, -1, -1)  # [B,S,Q]
 
-                # repeated_h：保持你原来 dq.h.view(1,1,Q).expand(B,S,-1) 的形状
+                # repeated_h：保持原来 dq.h.view(1,1,Q).expand(B,S,-1) 的形状
                 if h.dim() == 1:  # [Q]
                     h_q = h
                 elif h.dim() == 2:  # [S,Q] 或 [1,Q]
@@ -281,7 +270,7 @@ class Trainer:
                 )
                 pr = pr.repeat_interleave(1, dim=1)  # 保持一致
 
-                # ---- 测试策略分支（不改你的逻辑） ----
+                # ---- 测试策略分支 ----
                 if self.model_config["policy"]["test_policy"] == "sinkhorn":
                     lex = torch.zeros(B_test, S, Q, device=self.device)
                     v, s_bar, q_bar = rt.pad_pool(
@@ -318,9 +307,9 @@ class Trainer:
                     ).clamp_min(1e-4)
                     pr = pr / (pr.sum(dim=-1, keepdim=True) + 1e-8)
 
-                action = torch.round(pr)  # 测试时四舍五入为整数名额
+                action = torch.round(pr)
 
-                # --------- 关键修复：逐 env 提取并规整张量，再 cat ---------
+                # --------- 逐 env 提取并规整张量，再 cat ---------
                 reward_list = []
                 q_next_list = []
                 t_next_list = []
@@ -330,7 +319,6 @@ class Trainer:
                     action_i = action[i:i + 1]  # [1,S,Q]
                     out_i = env.step(TensorDict({"action": action_i}, batch_size=[1]))
 
-                    # 兼容 TorchRL ("next", ...) 或直接输出
                     if "next" in out_i.keys():
                         nxt = out_i["next"]
                         reward_i = nxt.get("reward", None)
@@ -369,7 +357,7 @@ class Trainer:
                 # 更新 td（只需要 queues/time）
                 td = TensorDict({"queues": queues_next, "time": time_next}, batch_size=[B_test])
 
-        # -------- 汇总测试指标（输出保持不变） --------
+        # -------- 汇总测试指标 --------
         time_now = time_next  # [B,1]
         cost_per_env = (total_cost / time_now).squeeze(-1)  # [B]
         test_cost_mean = cost_per_env.mean()

@@ -1,4 +1,3 @@
-# trainer_vectorized.py
 import numpy as np
 from tqdm import trange
 import torch
@@ -7,19 +6,17 @@ import math
 from tensordict import TensorDict
 from datetime import datetime
 
-# 你自己的工具（保持不变）
 from utils.switchplot import create_plot_dir, create_loss_dir
-# 如果你用到了 rt.*（pad_pool / Sinkhorn / linear_assignment_batch），请确保导入：
-# import your_runtime_lib as rt
 
 from main.env import BatchedDiffDES
 # from main.env_s import BatchedDiffDES
 import utils.routing as rt
 
+
 class Trainer:
     """
-    向量化版 Trainer：单实例 + 批量并行（default_B = batch_size）
-    适配最新的 BatchedDiffDES（TorchRL EnvBase 版，step 返回 TensorDict，含 cost/event_time）。
+    Vectorized Trainer: single instance + batch parallel (default_B = batch_size)
+    Adapted to the latest BatchedDiffDES (TorchRL EnvBase version, step returns TensorDict, including cost/event_time).
     """
 
     def __init__(self, model_config, env_config, policy, optimizer,
@@ -39,10 +36,10 @@ class Trainer:
 
         self.device = torch.device(self.model_config['env']['device'])
 
-    # ------------------------------ 训练 ------------------------------ #
+    # ------------------------------ Training ------------------------------ #
     def train_epoch(self):
-        B_train = self.model_config['opt']['train_batch']  # 并行轨迹数
-        # 单实例 batched 环境
+        B_train = self.model_config['opt']['train_batch']  # Number of parallel trajectories
+        # Single instance batched environment
         dq = BatchedDiffDES(
             self.env_config['network'],
             self.env_config['mu'],
@@ -59,17 +56,18 @@ class Trainer:
             reentrant=self.env_config.get('reentrant', 0)
         )
 
-        # reset（用 gen_params 指定 batch 维）
+        # reset (use gen_params to specify the batch dimension)
         td = dq.reset(dq.gen_params(batch_size=[B_train]))  # td['queues']: [B,Q], td['time']: [B,1]
 
         self.optimizer.zero_grad()
 
-        # 可选：记录梯度（保持你原本的 hooks）
         back_outs = []
+
         def action_hook(grad):
             back_outs.append(grad.detach().cpu().tolist())
 
         nn_back_ins = []
+
         def priority_hook(grad):
             nn_back_ins.append(grad.detach().cpu().tolist())
 
@@ -81,23 +79,20 @@ class Trainer:
 
         for _ in trange(self.env_config['train_T'], disable=True, leave=False):
             queues = td["queues"]  # [B,Q]
-            time   = td["time"]    # [B,1]
+            time = td["time"]  # [B,1]
 
-            # 注意：保持你 policy 接口一致
             pr = self.policy.train_forward(
                 queues, time,
-                dq.network,                                 # [S,Q]
-                dq.h.unsqueeze(0).expand(1, S, Q),          # [1,S,Q]（与你原代码接口一致）
-                dq.mu.view(1, S, Q)                         # [1,S,Q]
+                dq.network,  # [S,Q]
+                dq.h.unsqueeze(0).expand(1, S, Q),  # [1,S,Q]
+                dq.mu.view(1, S, Q)  # [1,S,Q]
             )
             pr.register_hook(priority_hook)
 
-            # 如果你训练阶段有“server pools”，可保留 repeat_interleave（原代码是 1）
             pr = pr.repeat_interleave(1, dim=1)
 
-            # ---- 你的策略分支（按需保留/修改） ----
+            # ---- Policy branch (keep/modify as needed) ----
             if self.model_config['policy']['train_policy'] == 'sinkhorn':
-                # 需要 rt.pad_pool / rt.Sinkhorn；若你的工程里叫别的名字，请自行改动
                 lex = torch.zeros(B_train, S, Q, device=self.device)
                 v, s_bar, q_bar = rt.pad_pool(
                     2 * pr + lex, queues.detach(),
@@ -114,33 +109,33 @@ class Trainer:
                 )[:, :S, :Q]
 
             elif self.model_config['policy']['train_policy'] == 'softmax':
-                pr = F.softmax(pr, dim=-1) * dq.network.unsqueeze(0)       # [B,S,Q]
+                pr = F.softmax(pr, dim=-1) * dq.network.unsqueeze(0)  # [B,S,Q]
                 pr = torch.minimum(pr, queues.unsqueeze(1).expand(-1, S, -1)).clamp_min(1e-4)
                 pr = pr / (pr.sum(dim=-1, keepdim=True) + 1e-8)
 
-            # 最终的动作（环境里会按你“离散名额分配”逻辑使用 action）
+            # The final action (the environment will use the action according to your "discrete quota allocation" logic)
             action = pr
             action.register_hook(action_hook)
 
-            # TorchRL step：传入 TensorDict
+            # TorchRL step: pass in TensorDict
             out = dq.step(TensorDict({"action": action}, batch_size=[B_train]))
-            # 统计
-            total_cost += out["cost"]                              # [B,1]
+            # Statistics
+            total_cost += out["cost"]  # [B,1]
             time_weight_queue_len += out["queues"] * out["event_time"]  # [B,Q]
-            # 下一步
+            # Next step
             td = out.select("queues", "time", "params")
 
-        # 反传 + 优化
+        # Backpropagation + optimization
         loss = torch.mean(total_cost / self.env_config['train_T'])
         loss.backward()
         torch.nn.utils.clip_grad_norm_(self.policy.network.parameters(),
                                        max_norm=self.model_config['opt']['grad_clip_norm'])
         self.optimizer.step()
 
-        # 打印训练期指标
+        # Print training period metrics
         current_time = td["time"]  # [B,1]
         train_cost_per_env = (total_cost / current_time).squeeze(-1)  # [B]
-        twql_per_env = (time_weight_queue_len / current_time)         # [B,Q]
+        twql_per_env = (time_weight_queue_len / current_time)  # [B,Q]
 
         print(f"train cost mean: {train_cost_per_env.mean().item():.6f}")
         print(f"train time-weighted mean queue len per q: {twql_per_env.mean(dim=0).tolist()}")
@@ -151,7 +146,7 @@ class Trainer:
             print("Action Grads (mean over steps):", action_grads)
             print("Priority Grads (mean over steps):", pri_grads)
 
-    # ------------------------------ 测试 ------------------------------ #
+    # ------------------------------ Testing ------------------------------ #
     def test_epoch(self, epoch):
         B_test = self.model_config['opt']['test_batch']
 
@@ -167,7 +162,6 @@ class Trainer:
             device=self.device,
             draw_service=self.draw_service,
             draw_inter_arrivals=self.draw_inter_arrivals,
-            # draw_due_date=self.draw_due_date,
             reentrant=self.env_config.get('reentrant', 0)
         )
 
@@ -184,17 +178,17 @@ class Trainer:
         with torch.no_grad():
             pbar = trange(self.env_config['test_T'],
                           desc=f"{datetime.now().strftime('%Y-%m-%d-%H-%M-%S')} - {self.experiment_name}",
-                          disable=True,  # <<< 强制关闭
+                          disable=True,
                           leave=False)
             for step in pbar:
-                queues = td["queues"]   # [B,Q]
-                time   = td["time"]     # [B,1]
+                queues = td["queues"]  # [B,Q]
+                time = td["time"]  # [B,1]
 
-                # 组装“重复版”输入，保持你原来的 policy 接口
-                repeated_queue   = queues.unsqueeze(1).expand(-1, S, -1)          # [B,S,Q]
-                repeated_network = dq.network.unsqueeze(0).expand(B_test, -1, -1) # [B,S,Q]
-                repeated_mu      = dq.mu.view(1, S, Q).expand(B_test, -1, -1)     # [B,S,Q]
-                repeated_h       = dq.h.view(1, 1, Q).expand(B_test, S, -1)       # [B,S,Q]
+                # Assemble the "repeated version" input to maintain the original policy interface
+                repeated_queue = queues.unsqueeze(1).expand(-1, S, -1)  # [B,S,Q]
+                repeated_network = dq.network.unsqueeze(0).expand(B_test, -1, -1)  # [B,S,Q]
+                repeated_mu = dq.mu.view(1, S, Q).expand(B_test, -1, -1)  # [B,S,Q]
+                repeated_h = dq.h.view(1, 1, Q).expand(B_test, S, -1)  # [B,S,Q]
 
                 pr = self.policy.test_forward(
                     step, queues, time,
@@ -202,9 +196,8 @@ class Trainer:
                 )
                 # pr_history.append(pr.detach().cpu())
 
-                pr = pr.repeat_interleave(1, dim=1)  # 如果你需要保持一致；否则可以去掉
-
-                # ---- 测试策略分支（与你原代码一致） ----
+                pr = pr.repeat_interleave(1, dim=1)
+                # ---- Testing policy branch (consistent with your original code) ----
                 if self.model_config['policy']['test_policy'] == 'sinkhorn':
                     lex = torch.zeros(B_test, S, Q, device=self.device)
                     v, s_bar, q_bar = rt.pad_pool(
@@ -236,34 +229,31 @@ class Trainer:
                     pr = pr / (pr.sum(dim=-1, keepdim=True) + 1e-8)
 
                 pr_history.append(pr.detach().cpu())
-                # 测试时你原来做的是四舍五入为整数名额
+
                 action = torch.round(pr)
-                # print(f'action: {action}')
+
                 action_history.append(action.detach().cpu())
 
                 out = dq.step(TensorDict({"action": action}, batch_size=[B_test]))
-                # 奖励 / 代价
+                # reward
                 total_cost += out["next", "reward"]
                 time_weight_queue_len += out["next", "queues"] * out["next", "event_time"]
                 td = out["next"].select("queues", "time")
 
-        # np.save("action_history.npy", torch.stack(action_history).numpy())
         np.save("pr_history.npy", torch.stack(pr_history).numpy())
-        # -------- 汇总测试指标 --------
+        # -------- Summarize test metrics --------
         time_now = td["time"]  # [B,1]
         cost_per_env = (total_cost / time_now).squeeze(-1)  # [B]
         test_cost_mean = cost_per_env.mean()
-        test_cost_std  = cost_per_env.std(unbiased=True)
-        test_cost_se   = test_cost_std / math.sqrt(B_test)
+        test_cost_std = cost_per_env.std(unbiased=True)
+        test_cost_se = test_cost_std / math.sqrt(B_test)
 
-        qlen_per_env = (time_weight_queue_len / time_now)   # [B,Q]
-        qlen_overall_per_env = qlen_per_env.mean(dim=1)     # [B]
-
-        # qlen_overall_per_env = qlen_per_env.sum(dim=1)
+        qlen_per_env = (time_weight_queue_len / time_now)  # [B,Q]
+        qlen_overall_per_env = qlen_per_env.mean(dim=1)  # [B]
 
         qlen_mean = qlen_overall_per_env.mean()
-        qlen_std  = qlen_overall_per_env.std(unbiased=True)
-        qlen_se   = qlen_std / math.sqrt(B_test)
+        qlen_std = qlen_overall_per_env.std(unbiased=True)
+        qlen_se = qlen_std / math.sqrt(B_test)
 
         print(f'------------------------test result------------------------')
         print(f"experiment: {self.experiment_name}")

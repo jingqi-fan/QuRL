@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH -J qgym_gpu_rl_n_model
+#SBATCH -J QuRL_gpu_rl_n_model
 #SBATCH -o slurm-%j.out
 #SBATCH --time=10:00:00
 #SBATCH --ntasks=1

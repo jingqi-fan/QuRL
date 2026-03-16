@@ -9,20 +9,14 @@ import re
 import csv
 from datetime import datetime
 
-# ---------------- 脚本映射 ---------------- #
+# ---------------- Script Mapping ---------------- #
 SCRIPT_MAP = {
     "cmu": "fixed_arrival_rate_cmu.py",
     "cmuq": "fixed_arrival_rate_cmuq.py",
-    # "fluid": "fixed_arrival_rate_fluid.py",
     "max_pressure": "fixed_arrival_rate_max_pressure.py",
-    # 可以继续加别的策略：
-    # "cmu_s": "s_cmu.py",
-    # "cmuq_s": "s_cmuq.py",
-    # "fluid_s": "s_fluid.py",
-    # "max_pressure_s": "s_max_pressure.py",
 }
 
-# ---------------- 指标解析正则 ---------------- #
+# ---------------- Metric Parsing Regex ---------------- #
 METRIC_PATTERNS = {
     "queue_len_mean": re.compile(r"queue length mean \(overall\):\s*([\-0-9.eE]+)"),
     "queue_len_std":  re.compile(r"queue length std\s*\(overall\):\s*([\-0-9.eE]+)"),
@@ -36,18 +30,18 @@ def parse_args():
     p = argparse.ArgumentParser(
         description="Run one experiment with <script_key> <env_stub>."
     )
-    # 必须参数
+    # Required arguments
     p.add_argument("script_key", type=str, help="Script key, e.g. cmu")
     p.add_argument("env_stub", type=str, help="Env stub, e.g. n_model_10")
 
-    # 可选参数
+    # Optional arguments
     p.add_argument("-m", "--model", type=str, default="ppg_singlebatch.yaml", help="Model yaml filename")
     p.add_argument("-n", "--experiment_name", type=str, default=None, help="Experiment name override")
 
-    # 目录
+    # Directories
     p.add_argument("--scripts_dir", type=str, default="configs/scripts")
     p.add_argument("--envs_dir", type=str, default="configs/env")
-    p.add_argument("--logs_dir", type=str, default="results/cla")  # 只存 CSV
+    p.add_argument("--logs_dir", type=str, default="results/cla")  # Only store CSV
     return p.parse_args()
 
 def ensure_dirs(*dirs):
@@ -71,7 +65,7 @@ def append_csv_row(csv_path, row_dict):
 def main():
     args = parse_args()
 
-    # 脚本
+    # Script
     script_key = args.script_key.strip()
     if script_key not in SCRIPT_MAP:
         raise SystemExit(f"Unknown script key: {script_key}")
@@ -80,23 +74,23 @@ def main():
     if not os.path.isfile(script_path):
         raise SystemExit(f"Script not found: {script_path}")
 
-    # 环境
+    # Environment
     env_stub = args.env_stub.strip()
     env_file = f"{env_stub}.yaml"
     env_path = os.path.join(args.envs_dir, env_file)
     if not os.path.isfile(env_path):
         raise SystemExit(f"Env file not found: {env_path}")
 
-    # 实验名
+    # Experiment name
     experiment_name = args.experiment_name or f"{env_stub}_{script_key}"
 
-    # CSV 路径
+    # CSV path
     ensure_dirs(args.logs_dir)
     csvfile = os.path.join(args.logs_dir, "exp.csv")
     timestamp = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
 
-    # 运行命令 —— 用当前解释器 + 无缓冲
-    py = shlex.quote(sys.executable)       # 保证是你当前conda里的python
+    # Run command —— Use current interpreter + unbuffered
+    py = shlex.quote(sys.executable)       # Ensure it is the Python in your current conda environment
     cmd_script = shlex.quote(script_path)
     command = f"{py} -u {cmd_script} -m={args.model} -e={env_file} -experiment_name={experiment_name}"
     print(f"[INFO] Running: {command}")
@@ -104,7 +98,7 @@ def main():
     metrics = {k: None for k in METRIC_PATTERNS.keys()}
     start_time = time.time()
 
-    # 传递环境变量，确保无缓冲与UTF-8
+    # Pass environment variables to ensure unbuffered and UTF-8
     env = os.environ.copy()
     env["PYTHONUNBUFFERED"] = "1"
     env["PYTHONIOENCODING"] = "utf-8"
@@ -137,13 +131,13 @@ def main():
     elapsed = time.time() - start_time
     print(f"[DONE] {command} finished in {elapsed:.2f} seconds (rc={proc.returncode})")
 
-    # 子进程失败则不要写入 CSV，直接退出（避免脏数据）
+    # If the child process fails, do not write to CSV, exit directly (avoid dirty data)
     if proc.returncode != 0:
         print("[ERROR] Child process failed. Skip logging to CSV. "
               "Likely wrong python env before this fix; ensure torch is importable.")
         sys.exit(proc.returncode)
 
-    # 写 CSV（只有当子进程成功时）
+    # Write CSV (only when the child process succeeds)
     append_csv_row(csvfile, {
         "timestamp": timestamp,
         "experiment_name": experiment_name,
