@@ -60,7 +60,7 @@ run() {
   # 回到项目根，保证相对路径正确
   ( cd "$PROJ" && \
     "$PY" -m RL.PPO.train "${env_stub}" "${tag}" \
-      # 如需显式传绝对路径，可在 RL.PPO.train 支持的前提下加：
+      # 如需显式传绝对路径，可在 RL.algorithms.train 支持的前提下加：
       # --envs_dir    "${PROJ}/configs/env" \
       # --logs_dir    "${PROJ}/results/cla"
   ) || warn "experiment failed: ${env_stub} ${tag}"

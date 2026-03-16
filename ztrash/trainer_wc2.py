@@ -133,7 +133,7 @@ class PPOArgs:
     train_batch: int
     test_batch: int
 
-    # PPO
+    # algorithms
     gamma: float
     gae_lambda: float
     clip_eps: float

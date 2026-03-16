@@ -1,4 +1,4 @@
-# QGymGPU/RL/train.py
+# QGymGPU/RL/train_multi_env.py
 import json
 import os
 import sys
@@ -9,13 +9,13 @@ import numpy as np
 import yaml
 import torch
 
-from RL.PPO_multi_env.trainer_pathwise import PathwiseTrainerTorchRL, PathwiseArgs
-# from RL.PPO_multi_env.trainer_wc import PPOTrainerTorchRL, PPOArgs
-from RL.PPO_multi_env.trainer_vanilla import PPOTrainerTorchRL_Vanilla
+from RL.algorithms_multi_env.trainer_pathwise import PathwiseTrainerTorchRL, PathwiseArgs
+# from RL.algorithms_multi_env.trainer_wc import PPOTrainerTorchRL, PPOArgs
+from RL.algorithms_multi_env.trainer_vanilla import PPOTrainerTorchRL_Vanilla
 from RL.env.rl_env import RLViewDiffDES
 from RL.utils.count_time import count_time
 
-from RL.PPO_multi_env.trainer_wc2 import PPOTrainerTorchRL, PPOArgs
+from RL.algorithms_multi_env.trainer_wc2 import PPOTrainerTorchRL, PPOArgs
 
 def load_rl_env(seed, batch):
     # ---- 抽样器（回到 torch 张量） ----

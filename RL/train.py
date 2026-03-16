@@ -1,4 +1,4 @@
-# QGymGPU/RL/train.py
+# QGymGPU/RL/train_multi_env.py
 import json
 import os
 import sys
@@ -9,14 +9,14 @@ import numpy as np
 import yaml
 import torch
 
-from RL.PPO.trainer_a2c import A2CTrainerTorchRL_Vanilla
-from RL.PPO.trainer_pathwise import PathwiseTrainerTorchRL, PathwiseArgs
-# from RL.PPO.trainer_wc import PPOTrainerTorchRL, PPOArgs
-from RL.PPO.trainer_vanilla import PPOTrainerTorchRL_Vanilla
+from RL.algorithms.trainer_a2c import A2CTrainerTorchRL_Vanilla
+from RL.algorithms.trainer_pathwise import PathwiseTrainerTorchRL, PathwiseArgs
+# from RL.algorithms.trainer_wc import PPOTrainerTorchRL, PPOArgs
+from RL.algorithms.trainer_vanilla import PPOTrainerTorchRL_Vanilla
 from RL.env.rl_env import RLViewDiffDES
 from RL.utils.count_time import count_time
 
-from RL.PPO.trainer_wc2 import PPOTrainerTorchRL, PPOArgs
+from RL.algorithms.trainer_wc2 import PPOTrainerTorchRL, PPOArgs
 
 def load_rl_env(seed, batch):
     # ---- 抽样器（回到 torch 张量） ----
@@ -94,7 +94,7 @@ def train_ppo():
         episode_steps=int(episode_steps),
         train_batch=int(train_batch),
         test_batch=int(test_batch),
-        # PPO
+        # algorithms
         gamma=float(gamma),
         gae_lambda=float(gae_lambda),
         clip_eps=0.2,  # 原来 SB3 里固定 0.2
@@ -136,7 +136,7 @@ def train_ppo():
         episode_steps=int(episode_steps),
         train_batch=int(train_batch),
         test_batch=int(test_batch),
-        # PPO
+        # algorithms
         gamma=float(gamma),
         max_grad_norm=1.0,  # 与原来一致
         # LR（分别对 policy / value）

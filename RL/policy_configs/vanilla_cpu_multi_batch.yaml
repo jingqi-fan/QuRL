@@ -1,4 +1,4 @@
-name: 'PPO'
+name: 'algorithms'
 env:
   device: 'cpu'
   env_temp: 1.0
@@ -61,7 +61,7 @@ checkpoint: null
 #ent_coef: 0.0
 #vf_coef: 0.5
 #lr: 0.0003                 # Adam 学习率（actor/critic 共用）
-#ppo_epochs: 10             # 每个 batch 上的 PPO 轮数
+#ppo_epochs: 10             # 每个 batch 上的 algorithms 轮数
 #minibatch_size: 64
 #frames_per_batch: 16     # 每次从采样器收集的步数（会被 SyncDataCollector 使用）
 #total_frames: 200000       # 训练总步数（collector 的 total_frames）

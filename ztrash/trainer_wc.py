@@ -133,7 +133,7 @@ class PPOArgs:
     train_batch: int
     test_batch: int
 
-    # PPO
+    # algorithms
     gamma: float
     gae_lambda: float
     clip_eps: float
@@ -227,7 +227,7 @@ class PPOTrainerTorchRL:
     #         adv_f  = adv.reshape(T*B)
     #         ret_f  = ret.reshape(T*B)
     #
-    #         # PPO updates（与 SB3 对齐：approx_kl、entropy、进度/调度）
+    #         # algorithms updates（与 SB3 对齐：approx_kl、entropy、进度/调度）
     #         approx_kl_running = 0.0
     #         idx = torch.randperm(T*B, device=obs_f.device)
     #         mb = self.args.minibatch_size

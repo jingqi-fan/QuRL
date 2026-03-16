@@ -3,7 +3,7 @@ import torch.nn.functional as F
 import torch
 from torch import nn
 
-from RL.PPO.trainer_vanilla import PPOTrainerTorchRL_Vanilla, compute_gae
+from RL.algorithms.trainer_vanilla import PPOTrainerTorchRL_Vanilla, compute_gae
 
 
 class A2CTrainerTorchRL_Vanilla(PPOTrainerTorchRL_Vanilla):

@@ -1,4 +1,4 @@
-name: 'PPO'
+name: 'algorithms'
 env:
   device: 'cuda'
   env_temp: 1.0

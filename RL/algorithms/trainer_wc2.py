@@ -133,7 +133,7 @@ class PPOArgs:
     train_batch: int
     test_batch: int
 
-    # PPO
+    # algorithms
     gamma: float
     gae_lambda: float
     clip_eps: float
@@ -201,151 +201,9 @@ class PPOTrainerTorchRL:
         if self.args.behavior_cloning:
             self._behavior_cloning()
 
-    # def learn(self):
-    #     self.print("Start training (single-env, batched)")
-    #     for epoch in range(self.args.total_epochs):
-    #         t0 = time.time()
-    #         traj = self._rollout(self.train_env, self.args.episode_steps, self.args.train_batch)
-    #
-    #         # SB3 等价 GAE
-    #         adv, ret = compute_gae(traj['rew'], traj['done'],
-    #                                traj['val'][:-1], traj['val'][1:],
-    #                                self.args.gamma, self.args.gae_lambda)
-    #         if self.args.normalize_advantage:
-    #             adv = (adv - adv.mean()) / (adv.std(unbiased=False) + 1e-8)
-    #
-    #         # 用本轮 rollout 的 returns 统计来做 value 重标尺（与你一致）
-    #         with torch.no_grad():
-    #             self.returns_mean = ret.mean()
-    #             self.returns_std  = ret.std().clamp_min(1e-6)
-    #
-    #         # flatten to [T*B]
-    #         T, B = self.args.episode_steps, self.args.train_batch
-    #         obs_f  = traj['obs'][:-1].reshape(T*B, self.args.obs_dim)
-    #         act_f  = traj['act'].reshape(T*B, self.args.S, self.args.Q)
-    #         oldlp  = traj['logp'].reshape(T*B)
-    #         adv_f  = adv.reshape(T*B)
-    #         ret_f  = ret.reshape(T*B)
-    #
-    #         # PPO updates（与 SB3 对齐：approx_kl、entropy、进度/调度）
-    #         approx_kl_running = 0.0
-    #         idx = torch.randperm(T*B, device=obs_f.device)
-    #         mb = self.args.minibatch_size
-    #
-    #         for _ in range(self.args.ppo_epochs):
-    #             for start in range(0, T*B, mb):
-    #                 mb_idx = idx[start:start+mb]
-    #                 o = obs_f[mb_idx]
-    #                 a = act_f[mb_idx]
-    #                 old_logp = oldlp[mb_idx]
-    #                 adv_mb = adv_f[mb_idx]
-    #                 ret_mb = ret_f[mb_idx]
-    #
-    #                 logits, v_pred = self.policy(o)
-    #
-    #                 # value 反标尺（与你的 WC_policy.rescale_v 一样）
-    #                 if self.args.rescale_value:
-    #                     v_pred = v_pred * self.returns_std + self.returns_mean
-    #
-    #                 # --- 分布：softmax → *network → min(·, obsQ) → 零行回退 → 归一化
-    #                 probs = self._wc_probs_from_logits_obs(logits, o)
-    #
-    #                 # new_logp（多分类独立的和）
-    #                 new_logp = self._log_prob_of(probs, a)
-    #
-    #                 ratio = torch.exp(new_logp - old_logp)
-    #                 surr1 = ratio * adv_mb
-    #                 surr2 = torch.clamp(ratio, 1 - self.args.clip_eps, 1 + self.args.clip_eps) * adv_mb
-    #                 policy_loss = -torch.min(surr1, surr2).mean()
-    #
-    #                 # 熵（按 S 求和后取均值）
-    #                 ent = self._entropy(probs).mean()
-    #
-    #                 value_loss = F.mse_loss(v_pred, ret_mb)
-    #
-    #                 # -- policy step
-    #                 self.opt_pi.zero_grad(set_to_none=True)
-    #                 (policy_loss - self.args.ent_coef * ent).backward(retain_graph=True)
-    #                 nn.utils.clip_grad_norm_(self.policy.parameters(), self.args.max_grad_norm)
-    #                 self.opt_pi.step()
-    #
-    #                 # -- value step
-    #                 self.opt_v.zero_grad(set_to_none=True)
-    #                 (self.args.vf_coef * value_loss).backward()
-    #                 nn.utils.clip_grad_norm_(self.policy.parameters(), self.args.max_grad_norm)
-    #                 self.opt_v.step()
-    #
-    #                 # LR schedule（SB3风格 progress_remaining）
-    #                 self._lr_step()
-    #
-    #                 # KL 近似（SB3公式）
-    #                 with torch.no_grad():
-    #                     log_ratio = new_logp - old_logp
-    #                     approx_kl = torch.mean((torch.exp(log_ratio) - 1) - log_ratio).clamp_min(0).item()
-    #                     approx_kl_running = 0.9 * approx_kl_running + 0.1 * approx_kl
-    #                 if self.args.target_kl is not None and approx_kl_running > 1.5 * self.args.target_kl:
-    #                     break
-    #             if self.args.target_kl is not None and approx_kl_running > 1.5 * self.args.target_kl:
-    #                 break
-    #
-    #         self.ct.get_end_time(time.time())
-    #         print(f'get total time {self.ct.get_total_time():.2f}s')
-    #         self.print(f"[Epoch {epoch+1}/{self.args.total_epochs}] , KL~{approx_kl_running:.5f}")
-    #
-    #         if (epoch + 1) % self.args.eval_every == 0:
-    #             self.evaluate()
-    #             # self.print(f"  Eval: return mean {mean_r:.4f} ± {std_r:.4f}")
-
-    # # ---------- internals ----------
-    # @torch.no_grad()
-    # def _rollout(self, env: EnvBase, T: int, B: int) -> Dict[str, torch.Tensor]:
-    #     device = torch.device(self.args.device)
-    #     td = env.reset()
-    #     obs = torch.zeros(T+1, B, self.args.obs_dim, device=device)
-    #     act = torch.zeros(T,   B, self.args.S, self.args.Q, device=device)
-    #     logp= torch.zeros(T,   B, device=device)
-    #     rew = torch.zeros(T,   B, device=device)
-    #     done= torch.zeros(T,   B, device=device)
-    #     val = torch.zeros(T+1, B, device=device)
-    #
-    #     obs[0] = td['obs'].to(device)
-    #     for t in range(T):
-    #         logits, v = self.policy(obs[t])
-    #
-    #         # value 反标尺
-    #         if self.args.rescale_value:
-    #             v = v * self.returns_std + self.returns_mean
-    #
-    #         # 概率
-    #         probs = self._wc_probs_from_logits_obs(logits, obs[t])
-    #
-    #         # 采样/贪心（与 WC_Policy.randomize 一致）
-    #         if self.args.randomize:
-    #             dist = OneHotCategorical(probs=probs)  # 一次性 over [B,S,Q] → 需按 S 拆分，简化用逐S采样：
-    #             # OneHotCategorical 只支持最后一维，这里手动逐S采样：
-    #             a, lp = self._sample_and_logp(probs)
-    #         else:
-    #             a, lp = self._argmax_and_logp(probs)
-    #
-    #         val[t] = v
-    #         act[t] = a
-    #         logp[t] = lp
-    #
-    #         out = env.step(TensorDict({"action": a.to(env.device)}, batch_size=[B]))
-    #         nxt = out["next"]
-    #         obs[t + 1] = nxt["obs"].to(device)
-    #         rew[t] = nxt["reward"].reshape(B).to(device)
-    #         done[t] = nxt["done"].reshape(B).to(device)
-    #
-    #     _, v_last = self.policy(obs[-1])
-    #     if self.args.rescale_value:
-    #         v_last = v_last * self.returns_std + self.returns_mean
-    #     val[-1] = v_last
-    #     return {"obs": obs, "act": act, "logp": logp, "rew": rew, "done": done, "val": val}
-
     # ---------- Learn ----------
     def learn(self):
-        self.print("Start training (TorchRL GPU-optimized)")
+        # self.print("Start training (TorchRL GPU-optimized)")
         for epoch in range(self.args.total_epochs):
             t0 = time.time()
 
@@ -395,16 +253,39 @@ class PPOTrainerTorchRL:
                     ent = self._entropy(probs).mean()
                     value_loss = F.mse_loss(v_pred, ret_mb)
 
-                    # self.opt_pi.zero_grad(set_to_none=True)
-                    # (policy_loss - self.args.ent_coef * ent).backward(retain_graph=True)
-                    # nn.utils.clip_grad_norm_(self.policy.parameters(), self.args.max_grad_norm)
-                    # self.opt_pi.step()
-                    #
-                    # self.opt_v.zero_grad(set_to_none=True)
-                    # (self.args.vf_coef * value_loss).backward()
-                    # nn.utils.clip_grad_norm_(self.policy.parameters(), self.args.max_grad_norm)
-                    # self.opt_v.step()
+                    # [MOD] —— 将 KL 的计算提前到 optimizer.step() 之前，用于“是否跳过该 minibatch”的判断
+                    with torch.no_grad():
+                        log_ratio = new_logp - old_logp
+                        approx_kl = torch.mean((torch.exp(log_ratio) - 1) - log_ratio).clamp_min(0).item()
+                        approx_kl_running = 0.9 * approx_kl_running + 0.1 * approx_kl
 
+                    # [MOD] —— 若 KL 过大：将当前 lr 在原值基础上减去 1e-4（不低于 min_lr），清空梯度并跳过本次更新
+                    # if self.args.target_kl and approx_kl_running > 1.5 * self.args.target_kl:
+                    if approx_kl > 1.5 * self.args.target_kl:
+
+                        # 降 policy lr
+                        for pg in self.opt_pi.param_groups:
+                            old_lr = pg["lr"]
+                            new_lr = max(old_lr - 1e-4, self.args.min_lr_policy)
+                            pg["lr"] = new_lr
+                        # # 降 value lr
+                        # for pg in self.opt_v.param_groups:
+                        #     old_lr = pg["lr"]
+                        #     new_lr = max(old_lr - 1e-4, self.args.min_lr_value)
+                        #     pg["lr"] = new_lr
+
+                        # 跳过该 minibatch：不做 backward/step，不推进 scheduler
+                        self.opt_pi.zero_grad(set_to_none=True)
+                        self.opt_v.zero_grad(set_to_none=True)
+                        # self.print(
+                        #     f"[AutoLR] KL {approx_kl_running:.4g} > {1.5 * self.args.target_kl:.4g} → "
+                        #     f"decrease lr by 1e-4 → "
+                        #     f"π:{self.opt_pi.param_groups[0]['lr']:.6f}, "
+                        #     f"V:{self.opt_v.param_groups[0]['lr']:.6f}. Skip minibatch."
+                        # )
+                        continue  # [MOD] —— 关键：跳过当前 minibatch
+
+                    # ===== 正常更新路径（KL 未超阈）=====
                     total_loss = (policy_loss - self.args.ent_coef * ent) + (self.args.vf_coef * value_loss)
                     self.opt_pi.zero_grad(set_to_none=True)
                     self.opt_v.zero_grad(set_to_none=True)
@@ -413,13 +294,10 @@ class PPOTrainerTorchRL:
                     self.opt_pi.step()
                     self.opt_v.step()
 
+                    # 基于进度的 LR 调度（warmup→余弦），保持不变
                     self._lr_step()
 
-                    with torch.no_grad():
-                        log_ratio = new_logp - old_logp
-                        approx_kl = torch.mean((torch.exp(log_ratio) - 1) - log_ratio).clamp_min(0).item()
-                        approx_kl_running = 0.9 * approx_kl_running + 0.1 * approx_kl
-
+                # 保留原有的外层 KL 早停（可选）
                 if self.args.target_kl and approx_kl_running > 1.5 * self.args.target_kl:
                     break
 
@@ -429,7 +307,6 @@ class PPOTrainerTorchRL:
 
             if (epoch + 1) % self.args.eval_every == 0:
                 self.evaluate()
-
 
     # ---------- Rollout ----------
     @torch.no_grad()

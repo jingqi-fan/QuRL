@@ -6,7 +6,7 @@
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=64G
 #SBATCH --gres=gpu:rtx8000:1
-#SBATCH --chdir=/scratch/jf5524/QGymGPU   # 保底：作业启动时的 CWD 就在项目根
+#SBATCH --chdir=/scratch/jf5524/QuRL   # 保底：作业启动时的 CWD 就在项目根
 
 set -euo pipefail
 set -x
@@ -22,12 +22,12 @@ export CONDA_PREFIX=/scratch/jf5524/conda/py310
 export LD_LIBRARY_PATH="${CONDA_PREFIX}/lib:${LD_LIBRARY_PATH:-}"
 
 # ========= 路径 =========
-PROJ=/scratch/jf5524/QGymGPU
+PROJ=/scratch/jf5524/QuRL
 LOGDIR=${PROJ}/logs
 mkdir -p "$LOGDIR"
 
 # 独立运行目录（用于中间文件/缓存），但注意：跑实验时会切回 $PROJ
-RUNDIR=${SCRATCH:-/scratch/jf5524}/QGymGPU/run-${SLURM_JOB_ID/.*}
+RUNDIR=${SCRATCH:-/scratch/jf5524}/QuRL/run-${SLURM_JOB_ID/.*}
 mkdir -p "$RUNDIR"
 cd "$RUNDIR"
 
@@ -73,10 +73,10 @@ run() {
 #run cmuq         reentrant_2f
 #run max_pressure reentrant_2f
 #
-#run cmu          n_model_mm_100
-#run cmu          n_model_mm_200
-#run cmu         en_model_mm_100
-#run cmu         en_model_mm_200
+run cmu          n_model_mm_100
+run cmu          n_model_mm_200
+run cmu          n_model_mm_100
+run cmu          n_model_mm_200
 
 #run cmu          n_model_mm_10
 #run cmu          n_model_mm_50

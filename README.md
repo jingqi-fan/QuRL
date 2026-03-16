@@ -148,7 +148,7 @@ CUDA >= 11
 Example: run a training experiment
 
 ```bash
-python train.py --config configs/env_data/reentrant_2.yaml \
+python train_multi_env.py --config configs/env_data/reentrant_2.yaml \
                 --policy RL/policy_configs/a2c.yaml
 ```
 
