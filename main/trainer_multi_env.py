@@ -1,5 +1,3 @@
-# trainer_vectorized.py
-import numpy as np
 from tqdm import trange
 import torch
 import torch.nn.functional as F
@@ -10,14 +8,9 @@ from datetime import datetime
 from utils.switchplot import create_plot_dir, create_loss_dir
 
 from main.env import BatchedDiffDES
-# from main.env_s import BatchedDiffDES
 import utils.routing as rt
 
 class Trainer:
-    """
-    向量化版 Trainer：单实例 + 批量并行（default_B = batch_size）
-    适配最新的 BatchedDiffDES（TorchRL EnvBase 版，step 返回 TensorDict，含 cost/event_time）。
-    """
 
     def __init__(self, model_config, env_config, policy, optimizer,
                  draw_service, draw_inter_arrivals, experiment_name, draw_due_date=None):
@@ -57,18 +50,18 @@ class Trainer:
         return envs
 
 
-    # ------------------------------ 训练 ------------------------------ #
+    # ------------------------------ Train ------------------------------ #
     def train_epoch(self):
-        # 并行数：通过创建多个 env 来做“并行 batch”，不使用多进程
+        # Parallel count: Use multiple envs to do "parallel batching" instead of multiprocessing
         B_train = self.model_config["opt"]["train_batch"]
 
-        # 把环境相关张量准备好（替代 dq.xxx）
+        # Prepare environment-related tensors (replacing dq.xxx)
         network = self.env_config["network"].to(self.device)  # [S,Q]
         mu = self.env_config["mu"].to(self.device)  # [S,Q]
         h = torch.tensor(self.env_config["h"], device=self.device).float()  # [S,Q]
         S, Q = network.shape
 
-        # 创建多个 env，每个 env reset 的 batch_size 都是 [1]
+        # Create multiple envs, the batch_size for each env reset is [1]
         envs = self._make_envs(B_train, self.model_config["env"]["train_seed"])
         td_list = [env.reset(env.gen_params(batch_size=[1])) for env in envs]
 
@@ -93,7 +86,7 @@ class Trainer:
             queues = td["queues"]  # [B,Q]
             time = td["time"]  # [B,1]
 
-            # policy 前向：一次性对 B_train 个 env 计算
+            # Policy forward pass: Compute for B_train envs at once
             pr = self.policy.train_forward(
                 queues,
                 time,
@@ -105,7 +98,7 @@ class Trainer:
 
             pr = pr.repeat_interleave(1, dim=1)
 
-            # ---- 策略分支（按需保留/修改） ----
+            # ---- Policy branch (keep/modify as needed) ----
             if self.model_config["policy"]["train_policy"] == "sinkhorn":
                 lex = torch.zeros(B_train, S, Q, device=self.device)
                 v, s_bar, q_bar = rt.pad_pool(
@@ -133,7 +126,7 @@ class Trainer:
                 ).clamp_min(1e-4)
                 pr = pr / (pr.sum(dim=-1, keepdim=True) + 1e-8)
 
-            # 最终动作
+            # Final action
             action = pr
             action.register_hook(action_hook)
 
@@ -147,11 +140,11 @@ class Trainer:
 
             out = torch.stack(out_list, dim=0)
 
-            # 统计
+            # Statistics
             total_cost += out["cost"]  # [B,1]
             time_weight_queue_len += out["queues"] * out["event_time"]  # [B,Q]
 
-            # 下一步
+            # Next step
             td = out.select("queues", "time", "params")
 
         loss = torch.mean(total_cost / self.env_config["train_T"])
@@ -163,7 +156,7 @@ class Trainer:
         )
         self.optimizer.step()
 
-        # 打印训练期指标
+        # Print training metrics
         current_time = td["time"]  # [B,1]
         train_cost_per_env = (total_cost / current_time).squeeze(-1)  # [B]
         twql_per_env = (time_weight_queue_len / current_time)  # [B,Q]
@@ -181,22 +174,22 @@ class Trainer:
             print("Action Grads (mean over steps):", action_grads)
             print("Priority Grads (mean over steps):", pri_grads)
 
-    # ------------------------------ 测试 ------------------------------ #
+    # ------------------------------ Test ------------------------------ #
     def test_epoch(self, epoch):
         B_test = self.model_config["opt"]["test_batch"]
 
-        # 环境参数（替代 dq.xxx）
+        # Environment parameters (replacing dq.xxx)
         network = self.env_config["network"].to(self.device)  # [S,Q]
         mu = self.env_config["mu"].to(self.device)  # [S,Q]
         h = torch.tensor(self.env_config["h"], device=self.device).float()
         S, Q = network.shape
 
-        # ---- helper：把 queues/time/reward/event_time 规整成稳定形状 ----
+        # ---- helper: Normalize queues/time/reward/event_time into stable shapes ----
         def _to_BQ(x: torch.Tensor) -> torch.Tensor:
-            # 目标 [B,Q]
-            # 允许 [B,Q], [B,1,Q], [B,1,1,Q] 等（中间全是 1）
+            # Target [B,Q]
+            # Allow [B,Q], [B,1,Q], [B,1,1,Q], etc. (1s in the middle)
             while x.dim() > 2:
-                # squeeze 中间的 singleton 维
+                # squeeze the middle singleton dimensions
                 squeezed = False
                 for d in range(1, x.dim() - 1):
                     if x.size(d) == 1:
@@ -210,8 +203,8 @@ class Trainer:
             return x
 
         def _to_B1(x: torch.Tensor) -> torch.Tensor:
-            # 目标 [B,1]
-            # 允许 [B,1], [B,1,1], [B,1,1,1]...
+            # Target [B,1]
+            # Allow [B,1], [B,1,1], [B,1,1,1]...
             while x.dim() > 2:
                 squeezed = False
                 for d in range(1, x.dim() - 1):
@@ -230,7 +223,7 @@ class Trainer:
         envs = self._make_envs(B_test, self.model_config["env"]["test_seed"])
         td_list = [env.reset(env.gen_params(batch_size=[1])) for env in envs]
 
-        # 将 td_list 组织成 batched td（只用于读 queues/time）
+        # Organize td_list into a batched td (only used to read queues/time)
         try:
             td = torch.stack(td_list, dim=0)
         except Exception:
@@ -255,10 +248,10 @@ class Trainer:
                 repeated_network = network.unsqueeze(0).expand(B_test, -1, -1)  # [B,S,Q]
                 repeated_mu = mu.unsqueeze(0).expand(B_test, -1, -1)  # [B,S,Q]
 
-                # repeated_h：保持原来 dq.h.view(1,1,Q).expand(B,S,-1) 的形状
+                # repeated_h: Keep the original shape of dq.h.view(1,1,Q).expand(B,S,-1)
                 if h.dim() == 1:  # [Q]
                     h_q = h
-                elif h.dim() == 2:  # [S,Q] 或 [1,Q]
+                elif h.dim() == 2:  # [S,Q] or [1,Q]
                     h_q = h[0] if h.shape[0] != 1 else h.squeeze(0)
                 else:
                     h_q = h.view(-1)[-Q:]
@@ -268,9 +261,9 @@ class Trainer:
                     step, queues, time,
                     repeated_queue, repeated_network, repeated_mu, repeated_h
                 )
-                pr = pr.repeat_interleave(1, dim=1)  # 保持一致
+                pr = pr.repeat_interleave(1, dim=1)  # Keep consistent
 
-                # ---- 测试策略分支 ----
+                # ---- Test policy branch ----
                 if self.model_config["policy"]["test_policy"] == "sinkhorn":
                     lex = torch.zeros(B_test, S, Q, device=self.device)
                     v, s_bar, q_bar = rt.pad_pool(
@@ -309,7 +302,7 @@ class Trainer:
 
                 action = torch.round(pr)
 
-                # --------- 逐 env 提取并规整张量，再 cat ---------
+                # --------- Extract and normalize tensors per env, then cat ---------
                 reward_list = []
                 q_next_list = []
                 t_next_list = []
@@ -323,23 +316,23 @@ class Trainer:
                         nxt = out_i["next"]
                         reward_i = nxt.get("reward", None)
                         if reward_i is None:
-                            raise KeyError("test_epoch: out['next'] 中没有 reward")
+                            raise KeyError("test_epoch: No reward in out['next']")
                         queues_i = nxt["queues"]
                         time_i = nxt["time"]
                         event_time_i = nxt["event_time"]
                     else:
-                        # 与 train_epoch 一致的字段命名（如果你的 env 是 cost，就当 reward 用）
+                        # Consistent field naming with train_epoch (if your env uses cost, treat it as reward)
                         if "reward" in out_i.keys():
                             reward_i = out_i["reward"]
                         elif "cost" in out_i.keys():
                             reward_i = out_i["cost"]
                         else:
-                            raise KeyError("test_epoch: out 中未找到 reward/cost 字段")
+                            raise KeyError("test_epoch: reward/cost field not found in out")
                         queues_i = out_i["queues"]
                         time_i = out_i["time"]
                         event_time_i = out_i["event_time"]
 
-                    # 规整形状：reward/time/event_time -> [1,1]，queues -> [1,Q]
+                    # Normalize shapes: reward/time/event_time -> [1,1], queues -> [1,Q]
                     reward_list.append(_to_B1(reward_i))  # [1,1]
                     q_next_list.append(_to_BQ(queues_i))  # [1,Q]
                     t_next_list.append(_to_B1(time_i))  # [1,1]
@@ -350,14 +343,14 @@ class Trainer:
                 time_next = torch.cat(t_next_list, dim=0)  # [B,1]
                 event_time = torch.cat(et_list, dim=0)  # [B,1]
 
-                # 统计（不会再出现 [B,B,1]）
+                # Statistics (will no longer output [B,B,1])
                 total_cost += reward  # [B,1]
                 time_weight_queue_len += queues_next * event_time  # [B,Q]
 
-                # 更新 td（只需要 queues/time）
+                # Update td (only need queues/time)
                 td = TensorDict({"queues": queues_next, "time": time_next}, batch_size=[B_test])
 
-        # -------- 汇总测试指标 --------
+        # -------- Summarize test metrics --------
         time_now = time_next  # [B,1]
         cost_per_env = (total_cost / time_now).squeeze(-1)  # [B]
         test_cost_mean = cost_per_env.mean()

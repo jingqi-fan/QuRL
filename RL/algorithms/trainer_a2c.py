@@ -8,16 +8,15 @@ from RL.algorithms.trainer_vanilla import PPOTrainerTorchRL_Vanilla, compute_gae
 
 class A2CTrainerTorchRL_Vanilla(PPOTrainerTorchRL_Vanilla):
     """
-    从 PPOTrainerTorchRL_Vanilla 简化得到的 A2C / vanilla Actor-Critic：
-      - 不用 old_logp / ratio / clip
-      - 不做 ppo_epochs 重放（只对每批 rollout 更新 1 次；可按需做 minibatch 以省显存）
+    A2C /  simplified from PPOTrainerTorchRL_Vanilla
     """
+
     def learn(self):
         self.print("Start training (single-env, batched, vanilla A2C/Actor-Critic)")
         for epoch in range(self.args.total_epochs):
             traj = self._rollout(self.train_env, self.args.episode_steps, self.args.train_batch)
 
-            # GAE -> advantage/return
+            # advantage/return
             adv, ret = compute_gae(
                 traj['rew'], traj['done'],
                 traj['val'][:-1], traj['val'][1:],
@@ -26,10 +25,9 @@ class A2CTrainerTorchRL_Vanilla(PPOTrainerTorchRL_Vanilla):
             if self.args.normalize_advantage:
                 adv = (adv - adv.mean()) / (adv.std(unbiased=False) + 1e-8)
 
-            # 统计（你原来用于 rescale_value）
             with torch.no_grad():
                 self.returns_mean = ret.mean()
-                self.returns_std  = ret.std().clamp_min(1e-6)
+                self.returns_std = ret.std().clamp_min(1e-6)
 
             # flatten
             T, B = self.args.episode_steps, self.args.train_batch
@@ -38,7 +36,6 @@ class A2CTrainerTorchRL_Vanilla(PPOTrainerTorchRL_Vanilla):
             adv_f = adv.reshape(T * B)
             ret_f = ret.reshape(T * B)
 
-            # 可选：保留 minibatch（不重放，只跑一遍）
             mb = max(1, self.args.minibatch_size)
             idx = torch.randperm(T * B, device=obs_f.device)
 
@@ -58,7 +55,7 @@ class A2CTrainerTorchRL_Vanilla(PPOTrainerTorchRL_Vanilla):
                 new_logp = self._log_prob_of_logits(logits, a)
                 ent = self._entropy_from_logits(logits).mean()
 
-                # A2C actor loss（无 ratio/clip）
+                # A2C actor loss (no ratio/clip)
                 policy_loss = -(new_logp * adv_mb).mean()
                 value_loss = F.mse_loss(v_pred, ret_mb)
 
@@ -76,12 +73,11 @@ class A2CTrainerTorchRL_Vanilla(PPOTrainerTorchRL_Vanilla):
 
                 self._lr_step()
 
-            self.print(f"[Epoch {epoch+1}/{self.args.total_epochs}] done (A2C)")
+            self.print(f"[Epoch {epoch + 1}/{self.args.total_epochs}] done (A2C)")
 
             if (epoch + 1) % self.args.eval_every == 0:
                 self.evaluate()
 
-    # A2C 情况下总更新步数估计：每个 epoch 大概 ceil(T*B/mb) 次（不乘 ppo_epochs）
     def _estimate_total_updates(self) -> int:
         TnB = self.args.episode_steps * self.args.train_batch
         mb = max(1, self.args.minibatch_size)
