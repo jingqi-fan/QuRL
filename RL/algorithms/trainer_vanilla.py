@@ -1,4 +1,3 @@
-# vanilla_trainer_torchrl.py — TorchRL(0.6) 单环境-多batch，纯 softmax 策略
 import math, time
 from dataclasses import dataclass
 from typing import Optional, Tuple, Callable, Dict
@@ -10,9 +9,6 @@ from tensordict import TensorDict
 from torchrl.envs import EnvBase
 
 
-# ==========================
-# Utilities (SB3-style LR进度)
-# ==========================
 def cosine_with_warmup_sb3_style(initial_lr: float, min_lr: float, progress_remaining: float, warmup: float) -> float:
     pr = max(0.0, min(1.0, progress_remaining))
     if pr > (1.0 - warmup):
@@ -23,9 +19,6 @@ def cosine_with_warmup_sb3_style(initial_lr: float, min_lr: float, progress_rema
     return min_lr + (initial_lr - min_lr) * cos_decay
 
 
-# ==========================
-# Networks
-# ==========================
 class MLP(nn.Module):
     def __init__(self, inp: int, hidden: int, out: int):
         super().__init__()
@@ -50,9 +43,6 @@ class ActorCritic(nn.Module):
         return logits, value
 
 
-# ==========================
-# GAE
-# ==========================
 @torch.no_grad()
 def compute_gae(reward, done, value, next_value, gamma, lam):
     T, B = reward.shape
@@ -67,13 +57,7 @@ def compute_gae(reward, done, value, next_value, gamma, lam):
     return adv, ret
 
 
-# ==========================
-# Behavior Cloning dataset（vanilla：纯 softmax）
-# ==========================
 class BCDVanilla(torch.utils.data.Dataset):
-    """
-    随机生成 obs（队列长度），teacher 概率为 softmax(base)，按 S 行复制。
-    """
     def __init__(self, num_samples: int, S: int, Q: int, time_f: bool = False):
         self.num_samples = num_samples
         self.S, self.Q = S, Q
@@ -90,9 +74,6 @@ class BCDVanilla(torch.utils.data.Dataset):
         return obs, p
 
 
-# ==========================
-# Trainer (Single-Env, batched inside)
-# ==========================
 @dataclass
 class PPOArgs:
     device: str
