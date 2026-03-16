@@ -124,11 +124,6 @@ class PPOArgs:
 
 class PPOTrainerTorchRL_Vanilla:
     """
-    计算逻辑模仿 vanilla_policy.py（纯 softmax）：
-      - 使用 logits 直接向量化计算 log_prob/熵/采样（无 Categorical、无循环）
-      - 随机/贪心由 randomize 控制
-      - 可选 value 反标尺
-      - 保持 TorchRL 单环境 + 内部多 batch rollout
     """
     def __init__(self,
                  train_env: EnvBase,
@@ -161,16 +156,13 @@ class PPOTrainerTorchRL_Vanilla:
         self.mean_queue = torch.tensor(0.0, device=device)
         self.std_queue  = torch.tensor(1.0, device=device)
 
-    # ==== vanilla：队列标准化 ====
     def update_queue_stats(self, mean_queue_length: float, std_queue_length: float):
         self.mean_queue = torch.tensor(float(mean_queue_length), device=self.mean_queue.device)
         self.std_queue  = torch.tensor(max(1e-8, float(std_queue_length)), device=self.std_queue.device)
 
     def _standardize_queues(self, obs: torch.Tensor) -> torch.Tensor:
-        # 若 obs 包含 time_f 的额外维，这里仍整体减均值/除方差（与 vanilla_policy 的简化一致）
         return ((obs - self.mean_queue) / self.std_queue).float()
 
-    # ---------- 向量化工具（无 Categorical） ----------
     def _log_prob_of_logits(self, logits: torch.Tensor, one_hot: torch.Tensor) -> torch.Tensor:
         # logits: [B,S,Q], one_hot: [B,S,Q] (one-hot 动作)
         logp_all = F.log_softmax(logits, dim=-1)              # [B,S,Q]
@@ -279,7 +271,6 @@ class PPOTrainerTorchRL_Vanilla:
                     # LR schedule（SB3-style）
                     self._lr_step()
 
-                    # 近似 KL（与 SB3 相同）
                     with torch.no_grad():
                         log_ratio = new_logp - old_logp
                         approx_kl = torch.mean((torch.exp(log_ratio) - 1) - log_ratio).clamp_min(0).item()
@@ -298,7 +289,6 @@ class PPOTrainerTorchRL_Vanilla:
 
     @torch.no_grad()
     def _rollout(self, env: EnvBase, T: int, B: int) -> Dict[str, torch.Tensor]:
-        # 直接用统一设备
         device = torch.device(self.args.device)
         obs = torch.zeros(T + 1, B, self.args.obs_dim, device=device)
         act = torch.zeros(T, B, self.args.S, self.args.Q, device=device)
@@ -307,8 +297,8 @@ class PPOTrainerTorchRL_Vanilla:
         done = torch.zeros(T, B, device=device)
         val = torch.zeros(T + 1, B, device=device)
 
-        td = env.reset()  # 已在 GPU 上
-        obs[0] = td['obs']  # 不再 .to(...)
+        td = env.reset()
+        obs[0] = td['obs']
 
         for t in range(T):
             std_o_t = self._standardize_queues(obs[t])
@@ -316,7 +306,6 @@ class PPOTrainerTorchRL_Vanilla:
             if self.args.rescale_value:
                 v = v * self.returns_std + self.returns_mean
 
-            # 向量化采样/贪心（无 .to(...)）
             if self.args.randomize:
                 a, lp = self._sample_onehot_and_logp(logits)
             else:
@@ -326,11 +315,10 @@ class PPOTrainerTorchRL_Vanilla:
             act[t] = a
             logp[t] = lp
 
-            # env 已在同一 GPU；不再 a.to(env.device)
             out = env.step(TensorDict({"action": a}, batch_size=[B]))
             nxt = out["next"]
 
-            obs[t + 1] = nxt["obs"]  # 直接写入
+            obs[t + 1] = nxt["obs"]
             rew[t] = nxt["reward"].reshape(B)
             done[t] = nxt["done"].reshape(B)
             td = nxt
@@ -353,7 +341,6 @@ class PPOTrainerTorchRL_Vanilla:
         self.policy.train()
 
         for i, (obs, target) in enumerate(loader):
-            # obs: [B, Q(+1)]，target: [B, S, Q]（由 DataLoader 自动堆叠）
             obs = obs.to(device)
             target = target.to(device)
 
@@ -361,12 +348,9 @@ class PPOTrainerTorchRL_Vanilla:
             logits, _ = self.policy(std_obs)  # [B, S, Q]
             pred = F.softmax(logits, dim=-1)  # [B, S, Q]
 
-            # 与 pred 对齐 target 的形状
             if target.dim() == 2:
-                # 兼容极端情况下的 [S, Q]
                 target_b = target.unsqueeze(0).expand(pred.shape[0], -1, -1)
             elif target.dim() == 3:
-                # 正常情况：DataLoader 已堆叠成 [B, S, Q]
                 target_b = target
             else:
                 raise RuntimeError(f"Unexpected BC target shape: {tuple(target.shape)}")
@@ -421,24 +405,6 @@ class PPOTrainerTorchRL_Vanilla:
             dt = nxt["event_time"].reshape(B)
             queues_next = nxt["obs"][:, :Q]  # [B,Q]
             c_t = -r_t
-            # if "event_time" in nxt.keys():
-            #     dt = nxt["event_time"].reshape(B)
-            # elif "time" in nxt.keys() and "time" in td.keys():
-            #     dt = (nxt["time"].reshape(B) - td["time"].reshape(B)).clamp_min(0)
-            # else:
-            #     dt = torch.ones(B, device=device)
-            #
-            # # 右端点队列（next）
-            # if "queues" in nxt.keys():
-            #     queues_next = nxt["queues"][:, :Q]  # [B,Q]
-            # else:
-            #     queues_next = nxt["obs"][:, :Q]     # [B,Q] 回退
-
-            # # 右端点 cost（若无 cost 则用 -reward）
-            # if "cost" in nxt.keys():
-            #     c_t = nxt["cost"].reshape(B)
-            # else:
-            #     c_t = -r_t
 
             # —— 时间积分累计
             time_weight_queue_len += queues_next * dt.view(B, 1)  # [B,Q]

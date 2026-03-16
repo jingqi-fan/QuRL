@@ -69,19 +69,19 @@ class PathwiseArgs:
     total_epochs: int
 
     # extras
-    behavior_cloning: bool   # 可选：预训练
+    behavior_cloning: bool   # Optional: pre-training
     bc_samples: int
     bc_lr: float
 
     # eval
     eval_every: int
     eval_T: int
-    randomize: bool          # 评估是否采样（否则贪心）
+    randomize: bool          # Whether to sample during evaluation (otherwise greedy)
 
     # pathwise
-    tau: float               # 温度
-    rescale_value: bool      # 是否把 value 反标尺到 returns 量级
-    cost_is_negative_reward: bool  # 环境 reward 是否表示 -cost（常见做法：cost = -reward）
+    tau: float               # Temperature
+    rescale_value: bool      # Whether to rescale value to returns scale
+    cost_is_negative_reward: bool  # Whether env reward represents -cost (common practice: cost = -reward)
 
 
 class PathwiseTrainerTorchRL:
@@ -105,7 +105,7 @@ class PathwiseTrainerTorchRL:
         device = torch.device(args.device)
         self.policy = ActorCritic(args.obs_dim, args.S, args.Q, args.hidden).to(device)
 
-        # 两个优化器（策略/价值分离）
+        # Two optimizers (policy/value separated)
         self.opt_pi = torch.optim.Adam(self.policy.pi.parameters(), lr=args.lr_policy)
         self.opt_v  = torch.optim.Adam(self.policy.v.parameters(),  lr=args.lr_value)
 
@@ -115,13 +115,13 @@ class PathwiseTrainerTorchRL:
         self.returns_mean = torch.tensor(0.0, device=device)
         self.returns_std  = torch.tensor(1.0, device=device)
 
-        # 观测标准化（队列均值/方差）
+        # Observation standardization (queue mean/variance)
         self.mean_queue = torch.tensor(0.0, device=device)
         self.std_queue  = torch.tensor(1.0, device=device)
 
         self._discounts = None
 
-    # ====== 队列标准化======
+    # ====== Queue standardization ======
     def update_queue_stats(self, mean_queue_length: float, std_queue_length: float):
         self.mean_queue = torch.tensor(float(mean_queue_length), device=self.mean_queue.device)
         self.std_queue  = torch.tensor(max(1e-8, float(std_queue_length)), device=self.std_queue.device)
@@ -138,8 +138,8 @@ class PathwiseTrainerTorchRL:
 
     def _wc_softmax(self, logits: torch.Tensor, obs: torch.Tensor, tau: float, eps: float = 1e-8) -> torch.Tensor:
         """
-        numerator/denominator 通过对不可行位置置 -inf，再 log_softmax 得到；
-        若某行全不可行，回退为网络掩码上的均匀分布（避免 NaN）。
+        Numerator/denominator obtained by setting infeasible positions to -inf, then applying log_softmax;
+        If a row is entirely infeasible, fallback to a uniform distribution over the network mask (to avoid NaN).
         """
         B, S, Q = logits.shape
         pos_mask = (obs[:, :Q] > 0).unsqueeze(1)                    # [B,1,Q] (bool)
@@ -152,31 +152,31 @@ class PathwiseTrainerTorchRL:
         logp = F.log_softmax(masked, dim=-1)                         # [B,S,Q]
         p = logp.exp()                                                # [B,S,Q]
 
-        # 行全不可行时（和为0），回退到网络掩码均匀分布
+        # When a row is entirely infeasible (sum is 0), fallback to uniform distribution on the network mask
         row_sum = p.sum(dim=-1, keepdim=True)                        # [B,S,1]
         fallback = net_mask.float() / net_mask.float().sum(dim=-1, keepdim=True).clamp_min(1.0)  # [1,S,1]→[1,S,1]
         fallback = fallback.expand_as(p)
         return torch.where(row_sum > 0, p, fallback)
 
-    # ====== Policy/Value 前向（含可选 value 反标尺） ======
+    # ====== Policy/Value forward (with optional value rescaling) ======
     def _pi_v(self, obs: torch.Tensor):
         logits, v = self.policy(obs)
         if self.args.rescale_value:
             v = v * self.returns_std + self.returns_mean
         return logits, v
 
-    # ====== 单个 epoch 的 pathwise 训练 ======
+    # ====== Single epoch pathwise training ======
     def _train_one_epoch_pathwise(self):
         device = torch.device(self.args.device)
         B = self.args.train_batch
         T = self.args.episode_steps
         self.policy.train()
 
-        # reset & 初始 obs
+        # reset & initial obs
         td = self.train_env.reset()
         obs = td["obs"]
 
-        # 轨迹缓存（用于 value 训练；与策略图断开）
+        # Trajectory buffer (for value training; disconnected from policy graph)
         obs_traj = []
         cost_traj = []
 
@@ -193,25 +193,25 @@ class PathwiseTrainerTorchRL:
             obs_next = nxt["obs"]                  # [B, obs_dim]
             rew = nxt["reward"].reshape(B)
 
-            # 代价
+            # Cost
             step_cost = -rew if self.args.cost_is_negative_reward else rew
             cost_traj.append(step_cost)            # [B]
 
             obs = obs_next
 
-        # ===== 策略损失：折扣代价均值（直接从 cost 反传）=====
+        # ===== Policy loss: Discounted cost mean (backpropagated directly from cost) =====
         ep_cost = torch.stack(cost_traj, dim=1)    # [B,T]
         discounts = self._get_discounts(T, device)
         discounted_cost = (ep_cost * discounts.unsqueeze(0)).sum(dim=1)   # [B]
         policy_loss = discounted_cost.mean()
 
-        # ---- policy step（分头裁剪；改进点 6）----
+        # ---- policy step (separate clipping; improvement 6) ----
         self.opt_pi.zero_grad(set_to_none=True)
         policy_loss.backward()
         nn.utils.clip_grad_norm_(self.policy.pi.parameters(), self.args.max_grad_norm)
         self.opt_pi.step()
 
-        # ===== 值函数损失：用“与策略图断开”的目标 =====
+        # ===== Value function loss: using targets "disconnected from policy graph" =====
         with torch.no_grad():
             G = []
             running = torch.zeros(B, device=device)
@@ -221,16 +221,16 @@ class PathwiseTrainerTorchRL:
                 G.append(running)
             G = torch.stack(list(reversed(G)), dim=1)  # [B,T]
 
-            # 用本轮 returns 的统计更新反标尺参数（若启用）
+            # Update rescaling parameters with current round returns statistics (if enabled)
             self.returns_mean = G.mean()
             self.returns_std  = G.std().clamp_min(1e-6)
 
-        # ---- value step：一次性前向（改进点 5）----
+        # ---- value step: one-time forward (improvement 5) ----
         self.opt_v.zero_grad(set_to_none=True)
 
         obs_tb = torch.stack(obs_traj, dim=0)                 # [T,B,obs_dim]
         std_obs_tb = self._standardize(obs_tb)                # [T,B,obs_dim]
-        # 仅取 value 分支做一次性前向
+        # Only take the value branch for a one-time forward pass
         _, v_tb = self.policy(std_obs_tb.view(-1, self.args.obs_dim))  # v_tb: [T*B]
         v_tb = v_tb.view(obs_tb.shape[0], obs_tb.shape[1])    # [T,B]
 
@@ -244,13 +244,13 @@ class PathwiseTrainerTorchRL:
 
         return policy_loss.item(), value_loss.item()
 
-    # ====== 学习主循环 ======
+    # ====== Main learning loop ======
     def learn(self):
         self.print("Start training (Pathwise, single-env, batched)")
         for epoch in range(self.args.total_epochs):
             t0 = time.time()
 
-            # LR 调度（SB3 风格 progress_remaining）
+            # LR scheduling (SB3 style progress_remaining)
             self._lr_step()
 
             pl, vl = self._train_one_epoch_pathwise()
@@ -263,7 +263,7 @@ class PathwiseTrainerTorchRL:
             if (epoch + 1) % self.args.eval_every == 0:
                 self.evaluate()
 
-    # ====== evaluate ======
+    # ====== Evaluate ======
     @torch.no_grad()
     def evaluate(self):
         device = torch.device(self.args.device)
@@ -272,16 +272,16 @@ class PathwiseTrainerTorchRL:
 
         total_r = torch.zeros(B, device=device)
 
-        # —— 时间积分累计（右端点）
+        # —— Time integral accumulation (right endpoint)
         time_weight_queue_len = torch.zeros(B, Q, device=device)  # ∑(next_queues * dt)
         time_now = torch.zeros(B, device=device)  # ∑ dt
 
         for _ in range(self.args.eval_T):
-            # 标准化仅用于策略前向；统计一律用“右端点 next”
+            # Standardization is only for policy forward; statistics always use "right endpoint next"
             obs = td["obs"]                                # 已在 GPU
             std_obs = self._standardize(obs)
 
-            # 策略动作
+            # Policy action
             logits, _ = self._pi_v(std_obs)
             probs = self._wc_softmax(logits, obs, tau=self.args.tau)  # [B,S,Q]
 
@@ -293,33 +293,33 @@ class PathwiseTrainerTorchRL:
                 idx = probs.argmax(dim=-1)                                    # [B,S]
                 a = F.one_hot(idx, num_classes=self.args.Q).float()
 
-            # 环境前进一步（右端点统计）；无多余 .to(...)（改进点 1/6）
+            # Environment steps forward (right endpoint stats); no redundant .to(...) (improvement 1/6)
             out = self.eval_env.step(TensorDict({"action": a}, batch_size=[B]))
             nxt = out["next"]
 
-            # 奖励累计（保持原有返回）
+            # Reward accumulation (keep original return)
             r_t = nxt["reward"].reshape(B)
             total_r += r_t
 
-            # 步长 Δt：event_time > time 差分 > 1
+            # Step size Δt: event_time > time difference > 1
             dt = nxt["event_time"].reshape(B)
             queues_next = nxt["obs"][:, :Q]     # [B,Q]
 
-            # —— 时间积分累计
+            # —— Time integral accumulation
             time_weight_queue_len += queues_next * dt.view(B, 1)  # [B,Q]
             time_now += dt  # [B]
 
             td = nxt
 
-        # 每并行环境的“每队列时间平均长度”：[B,Q]
+        # "Time-averaged length per queue" for each parallel env: [B,Q]
         qlen_per_env = time_weight_queue_len / time_now.view(B, 1).clamp_min(1e-12)
         qlen_overall_per_env = qlen_per_env.mean(dim=1)  # [B]
 
-        # 跨 B 的统计
+        # Statistics across B
         q_mean = qlen_overall_per_env.mean().item()
         q_se = (qlen_overall_per_env.std(unbiased=True) / math.sqrt(B)).item()
 
-        # 保持原有的 return 统计/返回
+        # Keep the original return statistics/return
         ret_mean = total_r.mean().item()
         ret_std = total_r.std(unbiased=True).item()
 
@@ -352,7 +352,7 @@ class PathwiseTrainerTorchRL:
             opt.step()
         self.print("[BC] done")
 
-    # ====== LR 调度 ======
+    # ====== LR scheduling ======
     def _lr_step(self):
         progress = self.update_idx / max(1, self.total_updates - 1)
         pr = 1.0 - progress
