@@ -28,6 +28,7 @@ class MLP(nn.Module):
             nn.Linear(hidden, hidden), nn.Tanh(),
             nn.Linear(hidden, out),
         )
+
     def forward(self, x):
         return self.net(x)
 
@@ -37,12 +38,12 @@ class ActorCritic(nn.Module):
         super().__init__()
         self.S, self.Q = S, Q
         self.pi = MLP(obs_dim, hidden, S * Q)
-        self.v  = MLP(obs_dim, hidden, 1)
+        self.v = MLP(obs_dim, hidden, 1)
 
     def forward(self, obs: torch.Tensor):
         B = obs.shape[0]
         logits = self.pi(obs).view(B, self.S, self.Q)
-        value  = self.v(obs).squeeze(-1)
+        value = self.v(obs).squeeze(-1)
         return logits, value
 
 
@@ -69,7 +70,8 @@ class BCD(torch.utils.data.Dataset):
         self.num_samples = num_samples
         self.time_f = time_f
 
-    def __len__(self): return self.num_samples
+    def __len__(self):
+        return self.num_samples
 
     def __getitem__(self, idx):
         queues = torch.randint(0, 101, (self.q,), dtype=torch.float32)
@@ -78,8 +80,8 @@ class BCD(torch.utils.data.Dataset):
         else:
             obs = queues
 
-        base = F.softmax(queues, dim=-1)              # [q]
-        p = base.unsqueeze(0).repeat(self.s, 1)       # [s,q]
+        base = F.softmax(queues, dim=-1)  # [q]
+        p = base.unsqueeze(0).repeat(self.s, 1)  # [s,q]
         p = p * self.network
         p = torch.minimum(p, queues.unsqueeze(0).repeat(self.s, 1))
         zero_row = torch.all(p == 0, dim=1, keepdim=True).float()
@@ -117,17 +119,17 @@ class PPOArgs:
     lr_value: float
     min_lr_policy: float
     min_lr_value: float
-    warmup: float  # 比例（0~1）
+    warmup: float  # Ratio (0~1)
 
     # training
     total_epochs: int
 
     # extras
     normalize_advantage: bool
-    rescale_value: bool      # == your rescale_v
+    rescale_value: bool  # == your rescale_v
     behavior_cloning: bool
-    randomize: bool          # == WC_Policy.randomize
-    time_f: bool             # == WC_Policy.time_f
+    randomize: bool  # == WC_Policy.randomize
+    time_f: bool  # == WC_Policy.time_f
 
     # eval
     eval_every: int
@@ -154,7 +156,7 @@ class PPOTrainerTorchRL:
         self.device = torch.device(args.device)
         self.policy = ActorCritic(args.obs_dim, args.S, args.Q, args.hidden).to(self.device)
 
-        # 优化器
+        # Optimizers
         self.opt_pi = torch.optim.Adam(self.policy.pi.parameters(), lr=args.lr_policy)
         self.opt_v = torch.optim.Adam(self.policy.v.parameters(), lr=args.lr_value)
 
@@ -225,22 +227,22 @@ class PPOTrainerTorchRL:
                         approx_kl = torch.mean((torch.exp(log_ratio) - 1) - log_ratio).clamp_min(0).item()
                         approx_kl_running = 0.9 * approx_kl_running + 0.1 * approx_kl
 
-                    # 若 KL 过大：将当前 lr 在原值基础上减去 1e-4（不低于 min_lr），清空梯度并跳过本次更新
+                    # If KL is too large: decrease current lr by 1e-4 (not below min_lr), zero gradients and skip this update
                     # if self.args.target_kl and approx_kl_running > 1.5 * self.args.target_kl:
                     if approx_kl > 1.5 * self.args.target_kl:
 
-                        # 降 policy lr
+                        # Decrease policy lr
                         for pg in self.opt_pi.param_groups:
                             old_lr = pg["lr"]
                             new_lr = max(old_lr - 1e-4, self.args.min_lr_policy)
                             pg["lr"] = new_lr
-                        # # 降 value lr
+                        # # Decrease value lr
                         # for pg in self.opt_v.param_groups:
                         #     old_lr = pg["lr"]
                         #     new_lr = max(old_lr - 1e-4, self.args.min_lr_value)
                         #     pg["lr"] = new_lr
 
-                        # 跳过该 minibatch：不做 backward/step，不推进 scheduler
+                        # Skip this minibatch: do not perform backward/step, do not advance scheduler
                         self.opt_pi.zero_grad(set_to_none=True)
                         self.opt_v.zero_grad(set_to_none=True)
                         # self.print(
@@ -251,7 +253,7 @@ class PPOTrainerTorchRL:
                         # )
                         continue
 
-                    # ===== 正常更新路径（KL 未超阈）=====
+                        # ===== Normal update path (KL within threshold) =====
                     total_loss = (policy_loss - self.args.ent_coef * ent) + (self.args.vf_coef * value_loss)
                     self.opt_pi.zero_grad(set_to_none=True)
                     self.opt_v.zero_grad(set_to_none=True)
@@ -260,10 +262,10 @@ class PPOTrainerTorchRL:
                     self.opt_pi.step()
                     self.opt_v.step()
 
-                    # 基于进度的 LR 调度（warmup→余弦），保持不变
+                    # Progress-based LR schedule (warmup -> cosine), remains unchanged
                     self._lr_step()
 
-                # 保留原有的外层 KL 早停（可选）
+                # Keep original outer KL early stopping (optional)
                 if self.args.target_kl and approx_kl_running > 1.5 * self.args.target_kl:
                     break
 
@@ -319,18 +321,17 @@ class PPOTrainerTorchRL:
 
     def _wc_probs_from_logits_obs(self, logits: torch.Tensor, obs: torch.Tensor) -> torch.Tensor:
         B, S, Q = logits.shape
-        probs = F.softmax(logits, dim=-1)                  # [B,S,Q]
+        probs = F.softmax(logits, dim=-1)  # [B,S,Q]
         probs = probs * self.network_mask.to(probs.device)
         if self.args.time_f:
             queues = obs[:, :Q]
         else:
-            queues = obs[:, :Q]  # 若 obs 仅 Q 维，这里等价
+            queues = obs[:, :Q]  # If obs is only Q-dimensional, this is equivalent
         probs = torch.minimum(probs, queues.view(B, 1, Q).repeat(1, S, 1))
         zero_mask = torch.all(probs == 0, dim=-1, keepdim=True).float()
         probs = probs + zero_mask * self.network_mask.to(probs.device)
         probs = probs / probs.sum(dim=-1, keepdim=True).clamp_min(1e-12)
         return probs
-
 
     def _sample_and_logp_vec(self, probs):  # probs: [B,S,Q]
         B, S, Q = probs.shape
@@ -369,7 +370,7 @@ class PPOTrainerTorchRL:
         for s in range(S):
             cat = Categorical(probs=probs[:, s, :])
             ent = ent + cat.entropy()
-        return ent / S  # 平均每个 S 的熵
+        return ent / S  # Average entropy per S
 
     def _lr_step(self):
 
@@ -389,7 +390,6 @@ class PPOTrainerTorchRL:
         steps_per_epoch = math.ceil(TnB / mb) * self.args.ppo_epochs
         return max(1, steps_per_epoch * self.args.total_epochs)
 
-
     def _behavior_cloning(self):
         self.print("[BC] start")
         assert isinstance(self.network_mask, torch.Tensor) and self.network_mask.dim() == 2, \
@@ -400,10 +400,10 @@ class PPOTrainerTorchRL:
         device = torch.device(self.args.device)
         self.policy.train()
         for i, (obs, target) in enumerate(loader):
-            obs = obs.to(device)                    # [B, q(+1)]
-            target = target.to(device)              # [S,Q]
-            logits, _ = self.policy(obs)            # [B,S,Q]
-            pred = self._wc_probs_from_logits_obs(logits, obs)
+            obs = obs.to(device)  # [B, q(+1)]
+            target = target.to(device)  # [S,Q]
+            logits, _ = self.policy(obs)  # [B,S,Q]
+            pred = self._wc_probs_from_logits_obs(logits, obs)  # Get probabilities using a consistent construction
             target_b = target.unsqueeze(0).expand(pred.shape[0], -1, -1)
             loss = F.mse_loss(pred, target_b)
             opt.zero_grad(set_to_none=True)
@@ -428,7 +428,6 @@ class PPOTrainerTorchRL:
         for _ in range(self.args.eval_T):
             obs = td["obs"].to(device)  # [B, obs_dim]
 
-
             logits, v = self.policy(obs)
             if self.args.rescale_value:
                 v = v * self.returns_std + self.returns_mean
@@ -438,29 +437,29 @@ class PPOTrainerTorchRL:
             else:
                 a, _ = self._argmax_and_logp(probs)
 
-            # 环境前进一步（右端点统计）
+            # Environment step forward (right endpoint statistics)
             out = self.eval_env.step(TensorDict({"action": a.to(self.eval_env.device)}, batch_size=[B]))
             nxt = out["next"]
 
-            # 累计奖励（保持原来的返回/打印习惯）
+            # Accumulate reward (keep original return/print conventions)
             r_t = nxt["reward"].reshape(B).to(device)
             total_r += r_t
 
-            # 右端点：使用 next 的队列
+            # Right endpoint: use next queues
             queues_next = nxt["obs"][:, :Q].to(device)
             dt = nxt["event_time"].reshape(B).to(device)  # [B]
 
-            # 时间积分：与之前 test_epoch 完全一致的形式
+            # Time integral: exactly the same form as the previous test_epoch
             time_weight_queue_len += queues_next * dt.view(B, 1)  # [B,Q]
             time_now += dt  # [B]
 
             td = nxt
 
-        # 每个并行环境、每个队列的时间平均队列长度：[B,Q]
+        # Time-averaged queue length per parallel env and per queue: [B,Q]
         qlen_per_env = time_weight_queue_len / time_now.view(B, 1).clamp_min(1e-12)
 
-        # 与“之前”一致的口径：对 Q 求均值得到“每队列平均长度”，再跨 B 做统计
-        qlen_overall_per_env = qlen_per_env.mean(dim=1)  # [B] 对每个queue求平均
+        # Consistent approach with "before": average over Q to get "average length per queue", then compute statistics across B
+        qlen_overall_per_env = qlen_per_env.mean(dim=1)  # [B] Average over each queue
 
         qlen_mean = qlen_overall_per_env.mean()
         qlen_std = qlen_overall_per_env.std(unbiased=True)
