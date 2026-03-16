@@ -3,40 +3,32 @@ import torch
 from tensordict import TensorDict, TensorDictBase
 from torchrl.data import Composite, Bounded, Unbounded
 
-from main.env import BatchedDiffDES  # 确保导入路径指向你刚才发的那个 env 定义
-
+from main.env import BatchedDiffDES
 
 class RLViewDiffDES(BatchedDiffDES):
     def __init__(self, *args, time_f: bool = True, **kwargs):
         self.time_f = time_f
         super().__init__(*args, **kwargs)
-        # super().__init__(batch_size=[default_B])
 
     def _make_spec(self):
-        # 先让父类生成 action/reward/done 等 spec
         super()._make_spec()
 
-        # ——统一观测为 obs——
         if self.time_f:
-            # obs = [queues, time]
             self.observation_spec = Composite(
                 obs=Unbounded(shape=(self.Q + 1,), dtype=torch.float32),
                 shape=(),
             )
         else:
-            # obs = queues
             self.observation_spec = Composite(
                 obs=Unbounded(shape=(self.Q,), dtype=torch.float32),
                 shape=(),
             )
-        # 与 observation_spec 对齐
+
         self.state_spec = self.observation_spec.clone()
-        # action_spec / reward_spec / done_spec 沿用父类已生成的
 
     def _filter_obs(self, td: TensorDictBase) -> TensorDictBase:
         out = TensorDict({}, batch_size=td.batch_size)
 
-        # 拷贝非观测字段（reward / done / event_time 等）
         for k, v in td.items():
             if k not in ("queues", "time"):
                 out.set(k, v)
@@ -64,16 +56,13 @@ class RLViewDiffDES(BatchedDiffDES):
 
 
 
-# 假设 RLViewDiffDES 已经在同目录导入
-# from your_env_file import RLViewDiffDES
-
 def dummy_draw_service(env, t):
-    """返回正态分布的 service times"""
+
     B = t.shape[0]
     return torch.ones(B, env.Q, device=env.device)
 
 def dummy_draw_inter_arrivals(env, t):
-    """返回常数 inter-arrivals"""
+
     B = t.shape[0]
     return torch.ones(B, env.Q, device=env.device) * 2.0
 
@@ -94,7 +83,7 @@ if __name__ == "__main__":
         temp=1.0,
         device="cuda",
         default_B=5,   # batch = 2
-        time_f=False,   # 👈 开关控制是否在 obs 里包含 time
+        time_f=False,   #  开关控制是否在 obs 里包含 time
     )
 
     # reset
