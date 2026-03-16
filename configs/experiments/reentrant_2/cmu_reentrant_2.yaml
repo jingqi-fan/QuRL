@@ -1,4 +1,0 @@
-env: '0_mm1.yaml'
-model: 'ppg_singlebatch.yaml'
-script: 'fixed_arrival_rate_cmu.py'
-experiment_name: '0_mm1_cmu'

@@ -2,7 +2,7 @@ import yaml
 import random
 
 # ---------- 配置（硬编码） ----------
-N = 10
+N = 3
 train_T = 5000
 test_T = 5000
 p_conn = 0.5  # network 联通(1)的概率；不联通(0)概率=0.3
