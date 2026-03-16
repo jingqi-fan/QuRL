@@ -118,7 +118,7 @@ class PPOArgs:
     lr_value: float
     min_lr_policy: float
     min_lr_value: float
-    warmup: float  # 比例（0~1）
+    warmup: float  # Ratio (0~1)
 
     # training
     total_epochs: int
@@ -155,7 +155,7 @@ class PPOTrainerTorchRL:
         self.device = torch.device(args.device)
         self.policy = ActorCritic(args.obs_dim, args.S, args.Q, args.hidden).to(self.device)
 
-        # 优化器
+        # Optimizers
         self.opt_pi = torch.optim.Adam(self.policy.pi.parameters(), lr=args.lr_policy)
         self.opt_v = torch.optim.Adam(self.policy.v.parameters(), lr=args.lr_value)
 
@@ -261,7 +261,7 @@ class PPOTrainerTorchRL:
         done = torch.zeros(T, B, device=device)
         val = torch.zeros(T + 1, B, device=device)
 
-        obs[0] = td["obs"]  # 不再 .to(device)
+        obs[0] = td["obs"]  # No longer .to(device)
 
         for t in range(T):
             logits, v = self.policy(obs[t])
@@ -278,7 +278,7 @@ class PPOTrainerTorchRL:
             act[t] = a
             logp[t] = lp
 
-            # GPU TensorDict step，无需拷贝
+            # GPU TensorDict step, no copy needed
             td = env.step(TensorDict({"action": a}, batch_size=[B]))
             nxt = td["next"]
 
@@ -296,12 +296,12 @@ class PPOTrainerTorchRL:
     def _wc_probs_from_logits_obs(self, logits: torch.Tensor, obs: torch.Tensor) -> torch.Tensor:
         B, S, Q = logits.shape
         probs = F.softmax(logits, dim=-1)                  # [B,S,Q]
-        probs = probs * self.network_mask.to(probs.device) # 掩码
-        # 取 obs 的队列部分
+        probs = probs * self.network_mask.to(probs.device) # Mask
+        # Extract the queue part of obs
         if self.args.time_f:
             queues = obs[:, :Q]
         else:
-            queues = obs[:, :Q]  # 若 obs 仅 Q 维，这里等价
+            queues = obs[:, :Q]  # If obs is only Q-dimensional, this is equivalent
         probs = torch.minimum(probs, queues.view(B, 1, Q).repeat(1, S, 1))
         zero_mask = torch.all(probs == 0, dim=-1, keepdim=True).float()
         probs = probs + zero_mask * self.network_mask.to(probs.device)
@@ -344,7 +344,7 @@ class PPOTrainerTorchRL:
         for s in range(S):
             cat = Categorical(probs=probs[:, s, :])
             ent = ent + cat.entropy()
-        return ent / S  # 平均每个 S 的熵
+        return ent / S  # Average entropy per S
 
     def _lr_step(self):
 
@@ -378,7 +378,7 @@ class PPOTrainerTorchRL:
             obs = obs.to(device)                    # [B, q(+1)]
             target = target.to(device)              # [S,Q]
             logits, _ = self.policy(obs)            # [B,S,Q]
-            pred = self._wc_probs_from_logits_obs(logits, obs)  # 用与你一致的构造拿到概率
+            pred = self._wc_probs_from_logits_obs(logits, obs)  # Get probabilities using a consistent construction
             target_b = target.unsqueeze(0).expand(pred.shape[0], -1, -1)
             loss = F.mse_loss(pred, target_b)
             opt.zero_grad(set_to_none=True)
@@ -413,28 +413,28 @@ class PPOTrainerTorchRL:
             else:
                 a, _ = self._argmax_and_logp(probs)
 
-            # 环境前进一步（右端点统计）
+            # Environment step forward (right endpoint statistics)
             out = self.eval_env.step(TensorDict({"action": a.to(self.eval_env.device)}, batch_size=[B]))
             nxt = out["next"]
 
-            # 累计奖励（保持原来的返回/打印习惯）
+            # Accumulate reward (keep original return/print convention)
             r_t = nxt["reward"].reshape(B).to(device)
             total_r += r_t
 
-            # 右端点：使用 next 的队列
+            # Right endpoint: use next queues
             queues_next = nxt["obs"][:, :Q].to(device)
             dt = nxt["event_time"].reshape(B).to(device)  # [B]
 
-            # 时间积分：与之前 test_epoch 完全一致的形式
+            # Time integral: exactly the same form as the previous test_epoch
             time_weight_queue_len += queues_next * dt.view(B, 1)  # [B,Q]
             time_now += dt  # [B]
 
             td = nxt
 
-        # 每个并行环境、每个队列的时间平均队列长度：[B,Q]
+        # Time-averaged queue length per parallel env and per queue: [B,Q]
         qlen_per_env = time_weight_queue_len / time_now.view(B, 1).clamp_min(1e-12)
 
-        qlen_overall_per_env = qlen_per_env.mean(dim=1)  # [B] 对每个queue求平均
+        qlen_overall_per_env = qlen_per_env.mean(dim=1)  # [B] Average over each queue
 
 
         qlen_mean = qlen_overall_per_env.mean()
