@@ -36,20 +36,6 @@ def load_rl_env(seed, batch):
         lam_t = torch.as_tensor(lam_vec, device=env.device).view(1, orig_q).expand(t.size(0), orig_q)
         return torch.distributions.Exponential(rate=lam_t).sample()
 
-    # ---- 构造环境 ----
-    # env = RLViewDiffDES(
-    #     network=network,
-    #     mu=mu,
-    #     h=h,
-    #     draw_service=draw_service,
-    #     draw_inter_arrivals=draw_inter_arrivals,
-    #     temp=env_temp,
-    #     device=device,
-    #     seed=seed,
-    #     default_B=batch,
-    #     queue_event_options=queue_event_options,
-    #     time_f=time_f,
-    # ).to(device)
     env = (RLViewDiffDES(
         network=network,
         mu=mu,
@@ -81,13 +67,13 @@ def train_ppo():
     train_env, train_act_spec, train_obs_dim = load_rl_env(train_seed, train_batch)
     eval_env, eval_act_spec, eval_obs_dim = load_rl_env(test_seed, test_batch)
 
-    # 2) 组装 Trainer 的参数（对齐你原来 SB3 的超参语义）
+    # 2) 组装 Trainer 的参数
     ppo_args = PPOArgs(
         device=device,
         obs_dim=int(train_obs_dim),
         S=int(orig_s),
         Q=int(orig_q),
-        hidden=int(scale * int(np.sqrt(orig_q * orig_s))),  # 与原来 scale * sqrt(L*J) 对齐
+        hidden=int(scale * int(np.sqrt(orig_q * orig_s))),
         # rollout
         episode_steps=int(episode_steps),
         train_batch=int(train_batch),
@@ -95,62 +81,58 @@ def train_ppo():
         # algorithms
         gamma=float(gamma),
         gae_lambda=float(gae_lambda),
-        clip_eps=0.2,  # 原来 SB3 里固定 0.2
+        clip_eps=0.2,
         ent_coef=float(ent_coef),
         vf_coef=float(vf_coef),
-        max_grad_norm=1.0,  # 与原来一致
+        max_grad_norm=1.0,
         ppo_epochs=int(ppo_epochs),
-        minibatch_size=int(ppo_batch_size),  # 原 config['training']['batch_size']
+        minibatch_size=int(ppo_batch_size),
         target_kl=(None if target_kl in [None, "None"] else float(target_kl)),
-        # LR（分别对 policy / value）
         lr_policy=float(lr_policy),
         lr_value=float(lr_value),
         min_lr_policy=float(min_lr_policy),
         min_lr_value=float(min_lr_value),
-        warmup=0.03,  # 与之前实现相同的 warmup 比例
-        # 训练轮次
+        warmup=0.03,
         total_epochs=int(num_epochs),
-        # 其他
         normalize_advantage=bool(normalize_advantage),
         rescale_value=bool(rescale_v),
         behavior_cloning=bool(bc),
-        bc_samples=1000,  # 与原 parallel_eval.BCD 一致
-        bc_lr=3e-4,  # 与原 BC 优化器一致
+        bc_samples=1000,
+        bc_lr=3e-4,
         # 评估
-        eval_every=1,  # 每个 epoch 评估一次（原来每个 episode_steps 调一次）
+        eval_every=1,
         eval_T=int(test_T),
         randomize=randomize,
         time_f=time_f
     )
 
-    # 2) 组装 Trainer 的参数（对齐你原来 SB3 的超参语义）
     pathwise_args = PathwiseArgs(
         device=device,
         obs_dim=int(train_obs_dim),
         S=int(orig_s),
         Q=int(orig_q),
-        hidden=int(scale * int(np.sqrt(orig_q * orig_s))),  # 与原来 scale * sqrt(L*J) 对齐
+        hidden=int(scale * int(np.sqrt(orig_q * orig_s))),
         # rollout
         episode_steps=int(episode_steps),
         train_batch=int(train_batch),
         test_batch=int(test_batch),
         # algorithms
         gamma=float(gamma),
-        max_grad_norm=1.0,  # 与原来一致
+        max_grad_norm=1.0,
         # LR（分别对 policy / value）
         lr_policy=float(lr_policy),
         lr_value=float(lr_value),
         min_lr_policy=float(min_lr_policy),
         min_lr_value=float(min_lr_value),
-        warmup=0.03,  # 与之前实现相同的 warmup 比例
+        warmup=0.03,
         # 训练轮次
         total_epochs=int(num_epochs),
         rescale_value=bool(rescale_v),
         behavior_cloning=bool(bc),
-        bc_samples=1000,  # 与原 parallel_eval.BCD 一致
-        bc_lr=3e-4,  # 与原 BC 优化器一致
+        bc_samples=1000,
+        bc_lr=3e-4,
         # 评估
-        eval_every=1,  # 每个 epoch 评估一次（原来每个 episode_steps 调一次）
+        eval_every=1,
         eval_T=int(test_T),
         randomize=randomize,
         tau=env_temp,
@@ -158,44 +140,39 @@ def train_ppo():
     )
     ct = count_time(time.time())
     if policy_file_name == 'WC.yaml' or policy_file_name == 'WC':
-        # 运行 WC 的
         trainer = PPOTrainerTorchRL(
             train_env=train_env,
             eval_env=eval_env,
             args=ppo_args,
-            network_mask=network if network.dim() == 2 else network[0],  # [S,Q] or按需处理
+            network_mask=network if network.dim() == 2 else network[0],
             ct=ct
         )
     elif policy_file_name == 'pathwise.yaml' or policy_file_name == 'pathwise':
-        # # 运行 pathwise 的
         trainer = PathwiseTrainerTorchRL(
             train_env=train_env,
             eval_env=eval_env,
             args=pathwise_args,
-            network_mask=network if network.dim() == 2 else network[0],  # [S,Q] or按需处理
+            network_mask=network if network.dim() == 2 else network[0],
             ct=ct
         )
     elif policy_file_name == 'a2c.yaml' or policy_file_name == 'a2c':
         trainer = A2CTrainerTorchRL_Vanilla(train_env=train_env, eval_env=eval_env, args=ppo_args, ct=ct)
     else:
-        # # 运行 vanilla 和 vanilla bc 的
         trainer = PPOTrainerTorchRL_Vanilla(
             train_env=train_env,
             eval_env=eval_env,
             args=ppo_args,
-            # network_mask=network if network.dim() == 2 else network[0],  # [S,Q] or按需处理
             ct=ct
         )
 
 
-    # 是否进行行为克隆预训练：由 config 控制（与原流程一致）
     if bc:
-        trainer.pre_train() # 可选：如果 policy_config['training']['behavior_cloning'] 为 True
+        trainer.pre_train()
     trainer.learn()
 
 
 if __name__ == "__main__":
-    project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # 输出为 QuRL 项目目录
+    project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     policy_file_name = sys.argv[1]
     env_file_name = sys.argv[2]
     print(f'Policy file: {policy_file_name}, Env file: {env_file_name}')
@@ -294,7 +271,6 @@ if __name__ == "__main__":
     reentrant = env_config.get('reentrant', 0)
 
     # training hyperparameters
-    # actors = policy_config['training']['actors']
     normalize_advantage = policy_config['training']['normalize_advantage']
     normalize_value = policy_config['training']['normalize_value']
     normalize_reward = policy_config['training']['normalize_reward']
@@ -307,7 +283,6 @@ if __name__ == "__main__":
     per_iter_normal_value = policy_config['training']['per_iter_normal_value']
 
     # learning rates:
-    # lr = policy_config['training']['lr']
     lr_policy = policy_config['training']['lr_policy']
     lr_value = policy_config['training']['lr_value']
     min_lr_policy =policy_config['training']['min_lr_policy']
@@ -332,12 +307,10 @@ if __name__ == "__main__":
     scale = policy_config['model']['scale']
     # policy hyperparameters
     test_policy = policy_config['policy']['test_policy']
-    # total steps
-    # total_steps = num_epochs * episode_steps * actors
     eval_freq = episode_steps
     test_T = env_config['test_T']
 
-    # ===== 新增：输出重定向到 results/rl/ =====
+    # ===== 输出重定向到 results/rl/ =====
     timestamp = time.strftime("%m%d_%H%M")
     results_dir = os.path.join(project_root, "results", "rl")
     os.makedirs(results_dir, exist_ok=True)

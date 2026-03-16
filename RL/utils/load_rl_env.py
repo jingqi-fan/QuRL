@@ -7,10 +7,8 @@ import torch
 from tensordict import TensorDict
 from typing import Any, Dict, Optional
 
-# 你的环境类（按你给的代码路径导入）
 # from main.env import BatchedDiffDES
 # from main.env_views import RLViewDiffDES
-from RL.env.rl_env import RLViewDiffDES  # 若文件同目录
 
 # ---------------- Utils ----------------
 # ---- helpers ----
