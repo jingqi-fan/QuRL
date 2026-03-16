@@ -164,7 +164,7 @@ class PPOTrainerTorchRL_Vanilla:
         return ((obs - self.mean_queue) / self.std_queue).float()
 
     def _log_prob_of_logits(self, logits: torch.Tensor, one_hot: torch.Tensor) -> torch.Tensor:
-        # logits: [B,S,Q], one_hot: [B,S,Q] (one-hot 动作)
+        # logits: [B,S,Q], one_hot: [B,S,Q] (one-hot action)
         logp_all = F.log_softmax(logits, dim=-1)              # [B,S,Q]
         idx = one_hot.argmax(dim=-1, keepdim=True)            # [B,S,1]
         logp = logp_all.gather(-1, idx).squeeze(-1)           # [B,S]
@@ -212,7 +212,7 @@ class PPOTrainerTorchRL_Vanilla:
             if self.args.normalize_advantage:
                 adv = (adv - adv.mean()) / (adv.std(unbiased=False) + 1e-8)
 
-            # rollout returns 统计（rescale_v 用）
+            # rollout returns statistics (for rescale_v)
             with torch.no_grad():
                 self.returns_mean = ret.mean()
                 self.returns_std  = ret.std().clamp_min(1e-6)
@@ -238,15 +238,15 @@ class PPOTrainerTorchRL_Vanilla:
                     adv_mb = adv_f[mb_idx]
                     ret_mb = ret_f[mb_idx]
 
-                    # 前向：标准化后进网络
+                    # Forward: standardize before entering network
                     std_o = self._standardize_queues(o)
                     logits, v_pred = self.policy(std_o)
 
-                    # value 反标尺（与 vanilla_policy 的 rescale_v 一致）
+                    # value rescaling (consistent with rescale_v in vanilla_policy)
                     if self.args.rescale_value:
                         v_pred = v_pred * self.returns_std + self.returns_mean
 
-                    # 直接基于 logits 计算 new_logp/entropy（无 softmax 中间张量）
+                    # compute new_logp/entropy directly based on logits (no intermediate softmax tensor)
                     new_logp = self._log_prob_of_logits(logits, a)
                     ratio = torch.exp(new_logp - old_logp)
                     surr1 = ratio * adv_mb
@@ -256,19 +256,19 @@ class PPOTrainerTorchRL_Vanilla:
                     ent = self._entropy_from_logits(logits).mean()
                     value_loss = F.mse_loss(v_pred, ret_mb)
 
-                    # policy step（无 retain_graph；只裁剪 policy 子网）
+                    # policy step (no retain_graph; only clip policy subnetwork)
                     self.opt_pi.zero_grad(set_to_none=True)
                     (policy_loss - self.args.ent_coef * ent).backward()
                     nn.utils.clip_grad_norm_(self.policy.pi.parameters(), self.args.max_grad_norm)
                     self.opt_pi.step()
 
-                    # value step（只裁剪 value 子网）
+                    # value step (only clip value subnetwork)
                     self.opt_v.zero_grad(set_to_none=True)
                     (self.args.vf_coef * value_loss).backward()
                     nn.utils.clip_grad_norm_(self.policy.v.parameters(), self.args.max_grad_norm)
                     self.opt_v.step()
 
-                    # LR schedule（SB3-style）
+                    # LR schedule (SB3-style)
                     self._lr_step()
 
                     with torch.no_grad():
@@ -373,17 +373,17 @@ class PPOTrainerTorchRL_Vanilla:
 
         total_r = torch.zeros(B, device=device)
 
-        # —— 时间积分累积量
+        # —— Time integral accumulation
         time_weight_queue_len = torch.zeros(B, Q, device=device)  # ∑(next_queues * dt)
         time_weight_cost = torch.zeros(B, device=device)  # ∑(cost * dt)
         time_now = torch.zeros(B, device=device)  # ∑ dt
 
         for _ in range(self.args.eval_T):
-            # 标准化仅用于策略前向；统计一律用“右端点 next”
+            # Standardization is only for policy forward; statistics always use "right endpoint next"
             obs_raw = td["obs"]  # 已在 GPU
             std_obs = self._standardize_queues(obs_raw)  # [B, obs_dim]
 
-            # 策略动作（logits → 向量化动作/对数概率）
+            # Policy action (logits -> vectorized action/log probability)
             logits, v = self.policy(std_obs)
             if self.args.rescale_value:
                 v = v * self.returns_std + self.returns_mean
@@ -393,32 +393,32 @@ class PPOTrainerTorchRL_Vanilla:
             else:
                 a, _ = self._argmax_onehot_and_logp(logits)
 
-            # 环境前进一步（右端点统计）；不再 .to(self.eval_env.device)
+            # Environment step forward (right endpoint statistics); no longer .to(self.eval_env.device)
             out = self.eval_env.step(TensorDict({"action": a}, batch_size=[B]))
             nxt = out["next"]
 
-            # 奖励累计（保持原有返回）
+            # Reward accumulation (keep original return)
             r_t = nxt["reward"].reshape(B)
             total_r += r_t
 
-            # 步长 Δt：优先 event_time；其次 time 差；最后退化为 1
+            # Step size Δt: prioritize event_time; then time difference; finally fallback to 1
             dt = nxt["event_time"].reshape(B)
             queues_next = nxt["obs"][:, :Q]  # [B,Q]
             c_t = -r_t
 
-            # —— 时间积分累计
+            # —— Time integral accumulation
             time_weight_queue_len += queues_next * dt.view(B, 1)  # [B,Q]
             time_weight_cost += c_t * dt  # [B]
             time_now += dt  # [B]
 
             td = nxt
 
-        # —— 每并行环境的“每队列时间平均长度”：[B,Q]
+        # —— "Time-averaged length per queue" for each parallel env: [B,Q]
         qlen_per_env = time_weight_queue_len / time_now.view(B, 1).clamp_min(1e-12)
-        # 与上面口径一致：对 Q 取均值得到“每环境的平均队列长度”：[B]
+        # Consistent with the above: average over Q to get "average queue length per env": [B]
         qlen_overall_per_env = qlen_per_env.mean(dim=1)
 
-        # 跨 B 的统计
+        # Statistics across B
         q_mean = qlen_overall_per_env.mean().item()
         q_std = qlen_overall_per_env.std(unbiased=True)
         q_se = (q_std / math.sqrt(B)).item()

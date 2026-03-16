@@ -1,4 +1,3 @@
-# A_revised.py — TorchRL(0.6) 单环境-多batch，计算逻辑贴近你的实现
 import math, time
 from dataclasses import dataclass
 from typing import Optional, Tuple, Callable, Dict, Any
@@ -11,29 +10,16 @@ from torch.distributions import Categorical, OneHotCategorical
 from torchrl.envs import EnvBase
 
 
-# ==========================
-# Utilities
-# ==========================
 def cosine_with_warmup_sb3_style(initial_lr: float, min_lr: float, progress_remaining: float, warmup: float) -> float:
-    """
-    SB3风格的进度：progress_remaining 从 1.0 线性衰减到 0.0
-    - 在 warmup 阶段(靠近1.0的一段) 线性升至 initial_lr
-    - 之后余弦衰减到 min_lr
-    """
     pr = max(0.0, min(1.0, progress_remaining))
-    # warmup 区：pr ∈ (1-warmup, 1] —— 注意 warmup 是比例
     if pr > (1.0 - warmup):
         warmup_progress = (1.0 - pr) / max(1e-12, warmup)
         return min_lr + (initial_lr - min_lr) * warmup_progress
-    # 余弦段：把 pr 映射到 [0,1]
     adj = (pr - (1.0 - warmup)) / max(1e-12, (1.0 - warmup))
     cos_decay = 0.5 * (1.0 + math.cos(math.pi * adj))
     return min_lr + (initial_lr - min_lr) * cos_decay
 
 
-# ==========================
-# Networks
-# ==========================
 class MLP(nn.Module):
     def __init__(self, inp: int, hidden: int, out: int):
         super().__init__()
@@ -60,9 +46,6 @@ class ActorCritic(nn.Module):
         return logits, value
 
 
-# ==========================
-# GAE
-# ==========================
 @torch.no_grad()
 def compute_gae(reward, done, value, next_value, gamma, lam):
     """Shapes: reward/done/value/next_value -> [T,B]. Return adv, ret both [T,B]."""
@@ -78,17 +61,7 @@ def compute_gae(reward, done, value, next_value, gamma, lam):
     return adv, ret
 
 
-# ==========================
-# 行为克隆数据（按你的概率构造规则）
-# ==========================
 class BCD(torch.utils.data.Dataset):
-    """
-    生成随机 obs（队列长度），并用“WC_Policy 风格”的规则构造 teacher 概率：
-      p = softmax(base) * network
-      p = min(p, obs)
-      若全零行 → 回退到 network
-      行归一化
-    """
     def __init__(self, num_samples: int, network: torch.Tensor, time_f: bool = False):
         net = network if isinstance(network, torch.Tensor) else torch.tensor(network, dtype=torch.float32)
         assert net.dim() == 2, f"network must be 2D (s,q), got {net.shape}"
@@ -100,7 +73,6 @@ class BCD(torch.utils.data.Dataset):
     def __len__(self): return self.num_samples
 
     def __getitem__(self, idx):
-        # obs_raw: [q] or [q+1]（最后一维可作为 time 特征；若 time_f=True，动作分布只看前 q）
         queues = torch.randint(0, 101, (self.q,), dtype=torch.float32)
         if self.time_f:
             obs = torch.cat([queues, torch.randint(0, 101, (1,), dtype=torch.float32)], dim=0)
@@ -117,9 +89,6 @@ class BCD(torch.utils.data.Dataset):
         return obs, p
 
 
-# ==========================
-# Trainer (Single-Env, batched inside)
-# ==========================
 @dataclass
 class PPOArgs:
     device: str
@@ -253,16 +222,6 @@ class PPOTrainerTorchRL:
                     ent = self._entropy(probs).mean()
                     value_loss = F.mse_loss(v_pred, ret_mb)
 
-                    # self.opt_pi.zero_grad(set_to_none=True)
-                    # (policy_loss - self.args.ent_coef * ent).backward(retain_graph=True)
-                    # nn.utils.clip_grad_norm_(self.policy.parameters(), self.args.max_grad_norm)
-                    # self.opt_pi.step()
-                    #
-                    # self.opt_v.zero_grad(set_to_none=True)
-                    # (self.args.vf_coef * value_loss).backward()
-                    # nn.utils.clip_grad_norm_(self.policy.parameters(), self.args.max_grad_norm)
-                    # self.opt_v.step()
-
                     total_loss = (policy_loss - self.args.ent_coef * ent) + (self.args.vf_coef * value_loss)
                     self.opt_pi.zero_grad(set_to_none=True)
                     self.opt_v.zero_grad(set_to_none=True)
@@ -292,16 +251,8 @@ class PPOTrainerTorchRL:
     # ---------- Rollout ----------
     @torch.no_grad()
     def _rollout(self, env: EnvBase, T: int, B: int) -> Dict[str, torch.Tensor]:
-        """
-        完全 GPU 版 rollout：
-        - 环境应已在 CUDA 上运行 (env.device == 'cuda:0')
-        - 不再重复 .to(device)
-        """
         device = self.device
         td = env.reset()
-        # 确保环境返回的数据与 policy 在同一 device
-        # assert td.device == device or str(td.device) == str(device), \
-        #     f"Env and model on different devices: env={td.device}, model={device}"
 
         obs = torch.zeros(T + 1, B, self.args.obs_dim, device=device)
         act = torch.zeros(T, B, self.args.S, self.args.Q, device=device)
@@ -343,14 +294,6 @@ class PPOTrainerTorchRL:
         return {"obs": obs, "act": act, "logp": logp, "rew": rew, "done": done, "val": val}
 
     def _wc_probs_from_logits_obs(self, logits: torch.Tensor, obs: torch.Tensor) -> torch.Tensor:
-        """
-        与 WC_Policy 一致的概率构造：
-          action = logits.view(B,S,Q) → softmax(dim=-1)
-          * network_mask
-          min(·, queues)     (若 time_f=True，queues = obs[..., :Q])
-          若一行全 0 → 回退 network_mask
-          行归一化
-        """
         B, S, Q = logits.shape
         probs = F.softmax(logits, dim=-1)                  # [B,S,Q]
         probs = probs * self.network_mask.to(probs.device) # 掩码
@@ -365,19 +308,6 @@ class PPOTrainerTorchRL:
         probs = probs / probs.sum(dim=-1, keepdim=True).clamp_min(1e-12)
         return probs
 
-    # def _sample_and_logp_vec(self, probs: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-    #     """
-    #     独立 S 个 Categorical 的采样与 log_prob 和（与你代码一致）
-    #     """
-    #     B, S, Q = probs.shape
-    #     a = torch.zeros(B, S, Q, device=probs.device)
-    #     logp = torch.zeros(B, device=probs.device)
-    #     for s in range(S):
-    #         cat = Categorical(probs=probs[:, s, :])
-    #         idx = cat.sample()            # [B]
-    #         a[torch.arange(B), s, idx] = 1.0
-    #         logp += cat.log_prob(idx)
-    #     return a, logp
     def _sample_and_logp_vec(self, probs):  # probs: [B,S,Q]
         B, S, Q = probs.shape
         flat = probs.reshape(B * S, Q)
@@ -389,9 +319,6 @@ class PPOTrainerTorchRL:
         return a, logp
 
     def _argmax_and_logp(self, probs: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-        """
-        贪心动作与对应 log_prob（按当前分布取 argmax）
-        """
         B, S, Q = probs.shape
         idx = probs.argmax(dim=-1)  # [B,S]
         a = F.one_hot(idx, num_classes=Q).float()
@@ -420,7 +347,7 @@ class PPOTrainerTorchRL:
         return ent / S  # 平均每个 S 的熵
 
     def _lr_step(self):
-        # SB3风格：progress_remaining = 1 - progress
+
         progress = self.update_idx / max(1, self.total_updates - 1)
         progress_remaining = 1.0 - progress
         for pg in self.opt_pi.param_groups:
@@ -437,7 +364,7 @@ class PPOTrainerTorchRL:
         steps_per_epoch = math.ceil(TnB / mb) * self.args.ppo_epochs
         return max(1, steps_per_epoch * self.args.total_epochs)
 
-    # ---------- Behavior Cloning ----------
+
     def _behavior_cloning(self):
         self.print("[BC] start")
         assert isinstance(self.network_mask, torch.Tensor) and self.network_mask.dim() == 2, \
@@ -463,11 +390,7 @@ class PPOTrainerTorchRL:
     # ---------- Evaluation ----------
     @torch.no_grad()
     def evaluate(self):
-        """
-          - 使用 next.queues × next.event_time 做时间积分（右连续）
-          - 先得到每队列的时间平均，再对 Q 求均值（每队列平均长度）
-          - 跨 B 计算 mean/std/se
-        """
+
         device = torch.device(self.args.device)
         td = self.eval_env.reset()
         B, Q = self.args.test_batch, self.args.Q
@@ -480,7 +403,7 @@ class PPOTrainerTorchRL:
         for _ in range(self.args.eval_T):
             obs = td["obs"].to(device)  # [B, obs_dim]
 
-            # 策略动作（与训练/原评估一致）
+
             logits, v = self.policy(obs)
             if self.args.rescale_value:
                 v = v * self.returns_std + self.returns_mean
@@ -501,19 +424,6 @@ class PPOTrainerTorchRL:
             # 右端点：使用 next 的队列
             queues_next = nxt["obs"][:, :Q].to(device)
             dt = nxt["event_time"].reshape(B).to(device)  # [B]
-            # if "queues" in nxt.keys():
-            #     queues_next = nxt["queues"][:, :Q].to(device)  # [B,Q]
-            # else:
-            #     # 若环境未显式提供 queues，就从 next.obs 里取前 Q 维
-            #     queues_next = nxt["obs"][:, :Q].to(device)
-            #
-            # # 步长 Δt：优先 next.event_time，其次用 time 差，最后退化为 1
-            # if "event_time" in nxt.keys():
-            #     dt = nxt["event_time"].reshape(B).to(device)  # [B]
-            # elif "time" in nxt.keys() and "time" in td.keys():
-            #     dt = (nxt["time"].reshape(B).to(device) - td["time"].reshape(B).to(device)).clamp_min(0)
-            # else:
-            #     dt = torch.ones(B, device=device)
 
             # 时间积分：与之前 test_epoch 完全一致的形式
             time_weight_queue_len += queues_next * dt.view(B, 1)  # [B,Q]
@@ -524,91 +434,12 @@ class PPOTrainerTorchRL:
         # 每个并行环境、每个队列的时间平均队列长度：[B,Q]
         qlen_per_env = time_weight_queue_len / time_now.view(B, 1).clamp_min(1e-12)
 
-        # 与“之前”一致的口径：对 Q 求均值得到“每队列平均长度”，再跨 B 做统计
         qlen_overall_per_env = qlen_per_env.mean(dim=1)  # [B] 对每个queue求平均
 
-        # qlen_overall_per_env = qlen_per_env.sum(dim=1)
 
         qlen_mean = qlen_overall_per_env.mean()
         qlen_std = qlen_overall_per_env.std(unbiased=True)
         qlen_se = qlen_std / math.sqrt(B)
 
         self.print(f"Eval (B={B}): queue length mean (overall): {qlen_mean.item():.4f}")
-        # self.print(f"std (overall): {qlen_std.item():.4f}")
         self.print(f"se (overall): {qlen_se.item():.4f}")
-
-        # 若你仍想保持原函数返回 (mean return, std return)：
-        # ret_mean = total_r.mean().item()
-        # ret_std = total_r.std(unbiased=True).item()
-        # return ret_mean, ret_std
-
-    # @torch.no_grad()
-    # def evaluate(self) -> Tuple[float, float]:
-    #     device = torch.device(self.args.device)
-    #     td = self.eval_env.reset()
-    #     B = self.args.test_batch
-    #
-    #     total_r = torch.zeros(B, device=device)
-    #
-    #     # 收集用于统计的序列
-    #     qlens_list = []   # 每步的每个样本的 queue length，shape 累积成 [T, B]
-    #     costs_list = []   # 同上，cost
-    #
-    #     for _ in range(self.args.eval_T):
-    #         obs_dev = td["obs"].to(device)  # [B, obs_dim]
-    #
-    #         # --- 队列长度：对 obs 的前 Q 维求和
-    #         Q = self.args.Q
-    #         queues = obs_dev[:, :Q]
-    #         qlen_t = queues.sum(dim=-1)  # [B]
-    #         qlens_list.append(qlen_t)
-    #
-    #         # --- 策略动作
-    #         logits, v = self.policy(obs_dev)
-    #         if self.args.rescale_value:
-    #             v = v * self.returns_std + self.returns_mean
-    #         probs = self._wc_probs_from_logits_obs(logits, obs_dev)
-    #         if self.args.randomize:
-    #             a, _ = self._sample_and_logp(probs)
-    #         else:
-    #             a, _ = self._argmax_and_logp(probs)
-    #
-    #         # --- 环境前进一步并记录 reward / cost
-    #         out = self.eval_env.step(TensorDict({"action": a.to(self.eval_env.device)}, batch_size=[B]))
-    #         nxt = out["next"]
-    #         r_t = nxt["reward"].reshape(B).to(device)
-    #         total_r += r_t
-    #
-    #         # cost 优先找显式 "cost"，否则假定 cost = -reward
-    #         if "cost" in nxt.keys():
-    #             c_t = nxt["cost"].reshape(B).to(device)
-    #         else:
-    #             c_t = -r_t
-    #         costs_list.append(c_t)
-    #
-    #         td = nxt
-    #
-    #     # --- 统计：对所有 T×B 样本取 mean 和标准误（SE = std / sqrt(N)）
-    #     T = self.args.eval_T
-    #     N = T * B
-    #
-    #     qlens = torch.stack(qlens_list, dim=0).reshape(N)      # [N]
-    #     costs = torch.stack(costs_list, dim=0).reshape(N)      # [N]
-    #
-    #     q_mean = qlens.mean().item()
-    #     # 使用无偏标准差做标准误：std(unbiased=True)/sqrt(N)
-    #     q_se = (qlens.std(unbiased=True) / math.sqrt(max(1, N))).item()
-    #
-    #     cost_mean = costs.mean().item()
-    #     cost_se = (costs.std(unbiased=True) / math.sqrt(max(1, N))).item()
-    #
-    #     # 原来的 return 统计
-    #     ret_mean = total_r.mean().item()
-    #     ret_std  = total_r.std(unbiased=True).item()
-    #
-    #     # 这里打印新增统计信息；返回值保持原样 (ret_mean, ret_std)
-    #     self.print(f"  Eval (T={T}, B={B}): "
-    #                f"queue mean {q_mean:.4f}, SE {q_se:.4f} | "
-    #                f"cost mean {cost_mean:.4f}, SE {cost_se:.4f}")
-    #
-    #     return ret_mean, ret_std

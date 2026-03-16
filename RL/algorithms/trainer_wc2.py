@@ -1,4 +1,3 @@
-# A_revised.py — TorchRL(0.6) 单环境-多batch，计算逻辑贴近你的实现
 import math, time
 from dataclasses import dataclass
 from typing import Optional, Tuple, Callable, Dict, Any
@@ -11,9 +10,6 @@ from torch.distributions import Categorical, OneHotCategorical
 from torchrl.envs import EnvBase
 
 
-# ==========================
-# Utilities
-# ==========================
 def cosine_with_warmup_sb3_style(initial_lr: float, min_lr: float, progress_remaining: float, warmup: float) -> float:
     """
     SB3风格的进度：progress_remaining 从 1.0 线性衰减到 0.0
