@@ -1,6 +1,6 @@
 import numpy as np
 
-# 定义矩阵内容
+# define the content of the matrix
 arr = np.array([
     [ 1.,  0.,  0.,  0.,  0.,  0.],
     [ 0.,  0.,  0.,  0.,  0.,  0.],
@@ -16,7 +16,7 @@ arr = np.array([
     [ 0.,  0.,  0.,  0.,  0., -1.]
 ])
 
-# 保存为 npy 文件
+# save as npy file
 np.save("reentrant_2_delta2.npy", arr)
 
-print("✅ 已生成 matrix.npy 文件。")
+print("✅  matrix.npy ")

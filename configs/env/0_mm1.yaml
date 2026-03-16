@@ -1,12 +1,12 @@
 name: '0_mm1'
 lam_type: 'constant'
 lam_params:
-  val: [0.5]            # λ = 0.5，到达率
-network: [[1]]          # 单队列
-mu: [[1.0]]             # μ = 1.0，服务率
+  val: [0.5]            # arrival rate λ = 0.5
+network: [[1]]          # 1 server serving 1 queue
+mu: [[1.0]]             # service rate μ = 1.0
 h: [1]                  # queue holding cost
-init_queues: [0]        # 初始队列长度为 0
-queue_event_options: null   # 用默认 ±1 事件
+init_queues: [0]
+queue_event_options: null   # use default ±1 queue events
 queue_event_options2: null
 train_T: 50
 test_T: 50
