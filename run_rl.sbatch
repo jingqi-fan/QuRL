@@ -79,16 +79,6 @@ run_multi_env() {
   info "END   $(date +'%F %T')  run: ${env_stub} ${tag}"
 }
 
-runs() {
-  local env_stub="$1"   # e.g. vanilla_bc.yaml
-  local tag="$2"        # e.g. n_model_mm_200
-  info "START $(date +'%F %T')  CWD=$(pwd)  run: ${env_stub} ${tag}"
-  # Switch back to project root to ensure relative paths work
-  ( cd "$PROJ" && \
-    "$PY" -m RL.PPO.train_s "${env_stub}" "${tag}" \
-  ) || warn "experiment failed: ${env_stub} ${tag}"
-  info "END   $(date +'%F %T')  run: ${env_stub} ${tag}"
-}
 
 # ====== Run multiple experiments sequentially (no srun needed) ======
 
