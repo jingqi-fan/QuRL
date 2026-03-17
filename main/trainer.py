@@ -9,6 +9,7 @@ from datetime import datetime
 from main.env import BatchedDiffDES
 # from main.env_s import BatchedDiffDES
 import utils.routing as rt
+from utils.switchplot import create_plot_dir, create_loss_dir
 
 
 class Trainer:
@@ -28,8 +29,8 @@ class Trainer:
         self.draw_due_date = draw_due_date
 
         self.test_loss = []
-        # self.fig_dir = create_plot_dir(self.model_config, self.env_config, experiment_name=experiment_name)
-        # self.loss_dir = create_loss_dir(self.model_config, self.env_config, experiment_name=experiment_name)
+        self.fig_dir = create_plot_dir(self.model_config, self.env_config, experiment_name=experiment_name)
+        self.loss_dir = create_loss_dir(self.model_config, self.env_config, experiment_name=experiment_name)
         self.experiment_name = experiment_name
 
         self.device = torch.device(self.model_config['env']['device'])

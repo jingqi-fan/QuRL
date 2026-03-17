@@ -89,7 +89,7 @@ export PYTHONPATH=/root/QuRL
 ```
 2. Run the experiment:
 ```bash
-python -m main.run_experiments -exp_dir n_model_mm_10
+python -m main.run_comparison cmu n_model_mm_10
 ```
 
 ###### Way 2: slurm run
@@ -139,7 +139,7 @@ export PYTHONPATH=/root/QuRL
 ```
 2. Run the experiment:
 ```bash
-python RL/train.py a2c.yaml n_model_mm_10
+python RL/train.py a2c.yaml n_model_mm_10
 ```
 
 ###### Way 2: slurm run
