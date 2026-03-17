@@ -1,21 +1,14 @@
-import sys
-# sys.path.append('/user/hc3295/queue-learning')
-
-from policies.max_weight import *
-from utils.switchplot import *
-
-
 import yaml
 import argparse
-from utils.switchplot import *
-from main.trainer import Trainer
-
 import torch
-import torch.optim as optim
-
 import json
+import numpy as np
 
-import os
+from main.trainer import Trainer
+from policies.max_weight import *
+
+
+
 
 parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
 parser.add_argument('-e', type=str)
@@ -87,7 +80,7 @@ lam_r_base = torch.as_tensor(lam_r, dtype=torch.float32)
 
 def lam_torch(env, t: torch.Tensor) -> torch.Tensor:
     """
-    t: [B,1], 返回 [B,Q] 的到达率（>0），在 env.device 上
+    t: [B,1], 返回 [B,Q] 的到达率（>0）
     """
     device = env.device
     B = t.shape[0]
