@@ -8,14 +8,10 @@ import numpy as np
 from main.trainer import Trainer
 from policies.max_pressure import *
 
-
 parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
 parser.add_argument('-e', type=str)
 parser.add_argument('-m', type=str)
 parser.add_argument('-experiment_name', type=str)
-
-
-
 
 args = parser.parse_args()
 
@@ -25,18 +21,16 @@ with open(f'configs/env/{args.e}', 'r', encoding='utf-8') as f:
 with open(f'configs/model/{args.m}', 'r', encoding='utf-8') as f:
     model_config = yaml.safe_load(f)
 
-
 experiment_name = args.experiment_name
-
 
 name = env_config['name']
 if env_config['network'] is None:
     if env_config['lam_type'] == 'hyper':
-        env_config['network'] = np.load(f'configs/env_data/{env_config["env_type"]}/{env_config["env_type"]}_network.npy')
+        env_config['network'] = np.load(
+            f'configs/env_data/{env_config["env_type"]}/{env_config["env_type"]}_network.npy')
     else:
         env_config['network'] = np.load(f'configs/env_data/{name}/{name}_network.npy')
 env_config['network'] = torch.tensor(env_config['network']).float()
-
 
 if env_config['mu'] is None:
     if env_config['lam_type'] == 'hyper':
@@ -49,27 +43,29 @@ orig_s, orig_q = env_config['network'].size()
 
 if env_config['queue_event_options'] == 'custom':
     if env_config['lam_type'] == 'hyper':
-        env_config['queue_event_options'] = torch.tensor(np.load(f'configs/env_data/{env_config["env_type"]}/{env_config["env_type"]}_delta.npy'))
+        env_config['queue_event_options'] = torch.tensor(
+            np.load(f'configs/env_data/{env_config["env_type"]}/{env_config["env_type"]}_delta.npy'))
     else:
         env_config['queue_event_options'] = torch.tensor(np.load(f'configs/env_data/{name}/{name}_delta.npy'))
-default_event_mat = torch.cat((F.one_hot(torch.arange(0,orig_q)), -F.one_hot(torch.arange(0,orig_q)))).float().to(model_config['env']['device'])
+default_event_mat = torch.cat((F.one_hot(torch.arange(0, orig_q)), -F.one_hot(torch.arange(0, orig_q)))).float().to(
+    model_config['env']['device'])
 if env_config['queue_event_options'] is None:
     env_config['queue_event_options'] = default_event_mat
 if type(env_config['queue_event_options']) == list:
     env_config['queue_event_options'] = torch.tensor(env_config['queue_event_options']).float()
-policy = MaxPressurePolicy(queue_event_options = env_config['queue_event_options'])
+policy = MaxPressurePolicy(queue_event_options=env_config['queue_event_options'])
 
-env_config['network'] = env_config['network'].repeat_interleave(1, dim = 0)
-env_config['mu'] = env_config['mu'].repeat_interleave(1, dim = 0)
+env_config['network'] = env_config['network'].repeat_interleave(1, dim=0)
+env_config['mu'] = env_config['mu'].repeat_interleave(1, dim=0)
 if 'server_pool_size' in env_config.keys():
     env_config['server_pool_size'] = torch.tensor(env_config['server_pool_size']).to(model_config['env']['device'])
 else:
     env_config['server_pool_size'] = torch.ones(orig_s).to(model_config['env']['device'])
 
-
 if env_config['queue_event_options2'] == 'custom':
     if env_config['lam_type'] == 'hyper':
-        env_config['queue_event_options2'] = torch.tensor(np.load(f'configs/env_data/{env_config["env_type"]}/{env_config["env_type"]}_delta2.npy'))
+        env_config['queue_event_options2'] = torch.tensor(
+            np.load(f'configs/env_data/{env_config["env_type"]}/{env_config["env_type"]}_delta2.npy'))
     else:
         env_config['queue_event_options2'] = torch.tensor(np.load(f'configs/env_data/{name}/{name}_delta2.npy'))
 if type(env_config['queue_event_options2']) == list:
@@ -88,9 +84,10 @@ else:
 
 lam_r_base = torch.as_tensor(lam_r, dtype=torch.float32)
 
+
 def lam_torch(env, t: torch.Tensor) -> torch.Tensor:
     """
-    t: [B,1], 返回 [B,Q] 的到达率（>0）
+    t: [B,1], returns arrival rates of shape [B,Q] (>0)
     """
     device = env.device
     B = t.shape[0]
@@ -103,24 +100,24 @@ def lam_torch(env, t: torch.Tensor) -> torch.Tensor:
         is_surge = (t.to(device) <= lam_params['t_step']).to(torch.float32)  # [B,1]
         val1 = torch.as_tensor(lam_params['val1'], dtype=torch.float32, device=device).view(1, Q)
         val2 = torch.as_tensor(lam_params['val2'], dtype=torch.float32, device=device).view(1, Q)
-        lam = is_surge * val1 + (1.0 - is_surge) * val2                      # [B,Q]
+        lam = is_surge * val1 + (1.0 - is_surge) * val2  # [B,Q]
     elif lam_type == 'hyper':
         scale = float(lam_params['scale'])
-        # 每个 batch 单元随机切换一种缩放
-        coins = torch.bernoulli(0.5 * torch.ones(B, 1, device=device))       # [B,1] in {0,1}
+        # Randomly switch a scaling factor for each batch unit
+        coins = torch.bernoulli(0.5 * torch.ones(B, 1, device=device))  # [B,1] in {0,1}
         lam_hi = lam_r / (1.0 + scale)
         lam_lo = lam_r / (1.0 - scale)
-        lam = coins * lam_hi + (1.0 - coins) * lam_lo                         # [B,Q]
+        lam = coins * lam_hi + (1.0 - coins) * lam_lo  # [B,Q]
     else:
         raise ValueError(f"Invalid lam_type: {lam_type}")
 
     return lam.clamp_min(1e-6)
 
-    
 
 if env_config['queue_event_options'] == 'custom':
     if env_config['lam_type'] == 'hyper':
-        env_config['queue_event_options'] = torch.tensor(np.load(f'configs/env_data/{env_config["env_type"]}/{env_config["env_type"]}_delta.npy'))
+        env_config['queue_event_options'] = torch.tensor(
+            np.load(f'configs/env_data/{env_config["env_type"]}/{env_config["env_type"]}_delta.npy'))
     else:
         env_config['queue_event_options'] = torch.tensor(np.load(f'configs/env_data/{name}/{name}_delta.npy'))
 if type(env_config['queue_event_options']) == list:
@@ -129,15 +126,15 @@ if type(env_config['queue_event_options']) == list:
 
 def draw_service(env, time: torch.Tensor) -> torch.Tensor:
     """
-    返回 [B,Q] 的正值张量（float32，env.device）
-    若 env_config['service_type']=='hyper'，用两种均值的指数混合；否则默认 Exp(mean=1)
+    Returns a positive tensor of shape [B,Q] (float32, env.device)
+    If env_config['service_type']=='hyper', uses an exponential mixture of two means; otherwise defaults to Exp(mean=1)
     """
     device = env.device
     B, Q = time.shape[0], env.Q
     U = torch.rand((B, Q), device=device).clamp_min(1e-6)
 
     if env_config.get('service_type') == 'hyper':
-        scale = 0.8  # 你原来的常量
+        scale = 0.8  # The original constant
         coins = torch.bernoulli(0.5 * torch.ones(B, Q, device=device))
         mean_a, mean_b = 1.0 + scale, 1.0 - scale
         a = -torch.log(U) * mean_a
@@ -149,26 +146,20 @@ def draw_service(env, time: torch.Tensor) -> torch.Tensor:
 
 def draw_inter_arrivals(env, time: torch.Tensor) -> torch.Tensor:
     """
-    返回 [B,Q] 的下一次到达间隔：Exp(rate=λ) => Exp(1)/λ
+    Returns the next inter-arrival times of shape [B,Q]: Exp(rate=λ) => Exp(1)/λ
     """
     device = env.device
     B, Q = time.shape[0], env.Q
     U = torch.rand((B, Q), device=device).clamp_min(1e-6)
-    exp1 = -torch.log(U)                        # Exp(rate=1)
-    lam  = lam_torch(env, time)                 # [B,Q]
+    exp1 = -torch.log(U)  # Exp(rate=1)
+    lam = lam_torch(env, time)  # [B,Q]
     return (exp1 / lam).to(torch.float32)
 
 
 optimizer = None
-trainer = Trainer(model_config, env_config, policy, optimizer, experiment_name = experiment_name, draw_service = draw_service, draw_inter_arrivals = draw_inter_arrivals)
-
+trainer = Trainer(model_config, env_config, policy, optimizer, experiment_name=experiment_name, draw_service=draw_service, draw_inter_arrivals=draw_inter_arrivals)
 
 trainer.test_epoch(0)
 
 with open(f'{trainer.loss_dir}/loss.json', 'w') as f:
     json.dump(trainer.test_loss, f)
-
-
-
-
-
