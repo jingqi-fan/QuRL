@@ -118,7 +118,8 @@ def train_ppo():
 
 
 if __name__ == "__main__":
-    project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    # project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     policy_file_name = sys.argv[1]
     env_file_name = sys.argv[2]
     print(f'Policy file: {policy_file_name}, Env file: {env_file_name}')
