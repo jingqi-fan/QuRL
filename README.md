@@ -156,32 +156,43 @@ sbatch run_crl.sbatch
 
 QuRL is built on **TorchRL** and **TensorDict**, where all environment states are stored on the GPU. The entire simulation pipeline is fully tensorized, enabling efficient batch computation and eliminating CPU–GPU communication overhead. 
 
+[//]: # ()
+[//]: # (<img src="assets/para.png" width="40%" align="right" />)
 
-<img src="assets/para.png" width="40%" align="right" />
+[//]: # ()
+[//]: # (## Inner-batched Simulation on GPUs)
 
-## Inner-batched Simulation on GPUs
+[//]: # ()
+[//]: # ()
+[//]: # (QuRL adopts **inner-batched simulation**, where multiple environments are simulated within a single environment instance using an additional batch dimension. )
 
+[//]: # ()
+[//]: # ()
+[//]: # (This design minimizes Python overhead and allows GPU tensor operations to execute all parallel environments simultaneously, significantly improving simulation throughput.)
 
-QuRL adopts **inner-batched simulation**, where multiple environments are simulated within a single environment instance using an additional batch dimension. 
+[//]: # ()
+[//]: # (### Ablation Experiments)
 
+[//]: # ()
+[//]: # (The following experiments compare different parallelization strategies &#40;CPU/GPU and multi-env vs inner-batched&#41;.  )
 
-This design minimizes Python overhead and allows GPU tensor operations to execute all parallel environments simultaneously, significantly improving simulation throughput.
+[//]: # ()
+[//]: # (**"GPU + inner-batched"** simulation is **the fastest** setting across all tested system sizes.)
 
-### Ablation Experiments
+[//]: # ()
+[//]: # (<p align="center"> <img src="assets/exp_aba.png" width="90%" /> </p>)
 
-The following experiments compare different parallelization strategies (CPU/GPU and multi-env vs inner-batched).  
+[//]: # ()
+[//]: # (### Comparison with Baselines)
 
-**"GPU + inner-batched"** simulation is **the fastest** setting across all tested system sizes.
+[//]: # ()
+[//]: # (We compare QuRL with **QGym**. )
 
-<p align="center"> <img src="assets/exp_aba.png" width="90%" /> </p>
+[//]: # ()
+[//]: # (As the number of queues and servers increases, QGym's runtime grows rapidly, while QuRL maintains nearly constant runtime due to GPU tensorization and inner-batched simulation.)
 
-### Comparison with Baselines
-
-We compare QuRL with **QGym**. 
-
-As the number of queues and servers increases, QGym's runtime grows rapidly, while QuRL maintains nearly constant runtime due to GPU tensorization and inner-batched simulation.
-
-<p align="center"> <img src="assets/exp_compare.png" width="70%" /> </p>
+[//]: # ()
+[//]: # (<p align="center"> <img src="assets/exp_compare.png" width="70%" /> </p>)
 
 ## Requirements
   
